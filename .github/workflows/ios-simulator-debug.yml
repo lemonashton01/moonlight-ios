@@ -1,0 +1,74 @@
+name: iOS Simulator Debug Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-simulator-debug-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Moonlight iOS Special (Simulator, Debug)
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Show build environment
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Run Special Keys logic tests
+        run: |
+          clang \
+            -std=c11 \
+            -Wall \
+            -Wextra \
+            -Werror \
+            Tests/SpecialKeysStateTests.c \
+            Limelight/Input/SpecialKeysState.c \
+            -o "$RUNNER_TEMP/special-keys-state-tests"
+          "$RUNNER_TEMP/special-keys-state-tests"
+
+      - name: Build unsigned Debug app for iOS Simulator
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild \
+            -project Moonlight.xcodeproj \
+            -target Moonlight \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            ONLY_ACTIVE_ARCH=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SYMROOT="$GITHUB_WORKSPACE/build" \
+            build 2>&1 | tee build/xcodebuild.log
+
+      - name: Upload Simulator app and build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moonlight-iOS-Special-Simulator-Debug-${{ github.sha }}
+          path: |
+            build/Debug-iphonesimulator/Moonlight.app
+            build/xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 7
