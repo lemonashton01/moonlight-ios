@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A17B10012D00100100A17B10 /* SpecialKeysPanel.m in Sources */ = {isa = PBXBuildFile; fileRef = A17B10042D00100100A17B10 /* SpecialKeysPanel.m */; };
+		A17B10022D00100100A17B10 /* SpecialKeysState.c in Sources */ = {isa = PBXBuildFile; fileRef = A17B10062D00100100A17B10 /* SpecialKeysState.c */; };
 		693B3A9B218638CD00982F7B /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = 693B3A9A218638CD00982F7B /* Settings.bundle */; };
 		98181BE92791277400E43572 /* libSDL2.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 98181BE82791275D00E43572 /* libSDL2.a */; };
 		98181BEB2791278F00E43572 /* libSDL2.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 98181BEA2791278300E43572 /* libSDL2.a */; };
@@ -170,6 +172,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A17B10032D00100100A17B10 /* SpecialKeysPanel.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SpecialKeysPanel.h; sourceTree = "<group>"; };
+		A17B10042D00100100A17B10 /* SpecialKeysPanel.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SpecialKeysPanel.m; sourceTree = "<group>"; };
+		A17B10052D00100100A17B10 /* SpecialKeysState.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SpecialKeysState.h; sourceTree = "<group>"; };
+		A17B10062D00100100A17B10 /* SpecialKeysState.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = SpecialKeysState.c; sourceTree = "<group>"; };
 		566E9D2B2770B23A00EF7BFE /* Moonlight v1.7.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = "Moonlight v1.7.xcdatamodel"; sourceTree = "<group>"; };
 		693B3A9A218638CD00982F7B /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
 		9803CCAB254F9EAF00EE185E /* ConnectionCallbacks.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ConnectionCallbacks.h; sourceTree = "<group>"; };
@@ -501,6 +507,10 @@
 		FB89460919F646E200339C8A /* Input */ = {
 			isa = PBXGroup;
 			children = (
+				A17B10032D00100100A17B10 /* SpecialKeysPanel.h */,
+				A17B10042D00100100A17B10 /* SpecialKeysPanel.m */,
+				A17B10052D00100100A17B10 /* SpecialKeysState.h */,
+				A17B10062D00100100A17B10 /* SpecialKeysState.c */,
 				FB89460A19F646E200339C8A /* ControllerSupport.h */,
 				FB89460B19F646E200339C8A /* ControllerSupport.m */,
 				FB89460C19F646E200339C8A /* StreamView.h */,
@@ -884,6 +894,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A17B10012D00100100A17B10 /* SpecialKeysPanel.m in Sources */,
+				A17B10022D00100100A17B10 /* SpecialKeysState.c in Sources */,
 				FB290D0719B2C406004C83CF /* Limelight.xcdatamodeld in Sources */,
 				9819CC22254F180F008A7C8E /* AbsoluteTouchHandler.m in Sources */,
 				9819CC14254F107A008A7C8E /* RelativeTouchHandler.m in Sources */,
