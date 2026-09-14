@@ -218,6 +218,7 @@
 - (void)willMoveToParentViewController:(UIViewController *)parent {
     // Only cleanup when we're being destroyed
     if (parent == nil) {
+        [_streamView endStreamingSession];
         [_controllerSupport cleanup];
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         [_streamMan stopStream];
@@ -391,6 +392,10 @@
 
 - (void)connectionTerminated:(int)errorCode {
     Log(LOG_I, @"Connection terminated: %d", errorCode);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self->_streamView endStreamingSession];
+    });
     
     unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
