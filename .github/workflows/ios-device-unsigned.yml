@@ -1,0 +1,144 @@
+name: iOS Device Unsigned Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-device-unsigned-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Moonlight iOS Special (Device, Unsigned)
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      BUILD_TARGET: Moonlight
+      BUILD_CONFIGURATION: Debug
+      CI_BUNDLE_IDENTIFIER: com.example.moonlight-ios-special
+
+    steps:
+      - name: Check out source and submodules
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Record build environment
+        run: |
+          mkdir -p build
+          {
+            echo "Xcode version:"
+            xcodebuild -version
+            echo
+            echo "iPhoneOS SDK version: $(xcrun --sdk iphoneos --show-sdk-version)"
+            echo "Target: $BUILD_TARGET"
+            echo "Configuration: $BUILD_CONFIGURATION"
+            echo "SDK: iphoneos"
+            echo "Destination: generic iOS device (iphoneos)"
+            echo "Architecture: arm64"
+            echo "Commit: $GITHUB_SHA"
+            echo "Branch or ref: $GITHUB_REF_NAME"
+            echo "Signing disabled: yes"
+            echo "CI bundle identifier: $CI_BUNDLE_IDENTIFIER"
+          } | tee build/build-info.txt
+
+      - name: Run Special Keys logic tests
+        run: |
+          clang \
+            -std=c11 \
+            -Wall \
+            -Wextra \
+            -Werror \
+            Tests/SpecialKeysStateTests.c \
+            Limelight/Input/SpecialKeysState.c \
+            -o "$RUNNER_TEMP/special-keys-state-tests"
+          "$RUNNER_TEMP/special-keys-state-tests"
+
+      - name: Build unsigned Debug app for iOS device
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Moonlight.xcodeproj \
+            -target "$BUILD_TARGET" \
+            -configuration "$BUILD_CONFIGURATION" \
+            -sdk iphoneos \
+            -arch arm64 \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            PRODUCT_BUNDLE_IDENTIFIER="$CI_BUNDLE_IDENTIFIER" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            SYMROOT="$GITHUB_WORKSPACE/build" \
+            build 2>&1 | tee build/xcodebuild.log
+
+      - name: Verify device binary and package unsigned IPA
+        run: |
+          APP_PATH="$GITHUB_WORKSPACE/build/Debug-iphoneos/Moonlight.app"
+          EXECUTABLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Info.plist")
+          EXECUTABLE_PATH="$APP_PATH/$EXECUTABLE_NAME"
+
+          test -d "$APP_PATH"
+          test -f "$EXECUTABLE_PATH"
+
+          file "$EXECUTABLE_PATH" | tee build/file-output.txt
+          xcrun vtool -show-build "$EXECUTABLE_PATH" | tee build/vtool-build.txt
+
+          grep -q 'arm64' build/file-output.txt
+          grep -Eq 'platform[[:space:]]+IOS([[:space:]]|$)' build/vtool-build.txt
+          if grep -q 'IOSSIMULATOR' build/vtool-build.txt; then
+            echo "Unexpected iOS Simulator binary in the device build."
+            exit 1
+          fi
+
+          if codesign -dv "$APP_PATH" >/dev/null 2>&1; then
+            echo "Expected an unsigned app, but a code signature is present."
+            exit 1
+          fi
+
+          {
+            echo
+            echo "App path: $APP_PATH"
+            echo "Executable: $EXECUTABLE_PATH"
+            echo "Code signature: absent (expected)"
+            echo
+            echo "file output:"
+            cat build/file-output.txt
+            echo
+            echo "Mach-O build version:"
+            cat build/vtool-build.txt
+          } | tee -a build/build-info.txt
+
+          mkdir -p build/ipa/Payload
+          ditto "$APP_PATH" build/ipa/Payload/Moonlight.app
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/ipa/Payload \
+            build/Moonlight-iOS-Special-unsigned.ipa
+
+          unzip -l build/Moonlight-iOS-Special-unsigned.ipa \
+            | head -n 20 \
+            | tee -a build/build-info.txt
+
+      - name: Upload unsigned device artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moonlight-iOS-Device-Unsigned-${{ github.sha }}
+          path: |
+            build/Debug-iphoneos/Moonlight.app
+            build/Moonlight-iOS-Special-unsigned.ipa
+            build/xcodebuild.log
+            build/build-info.txt
+            build/file-output.txt
+            build/vtool-build.txt
+          if-no-files-found: warn
+          retention-days: 7
