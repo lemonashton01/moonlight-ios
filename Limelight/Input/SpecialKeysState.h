@@ -60,6 +60,10 @@ void SpecialKeysPanelSetSelectedTab(SpecialKeysPanelState *state, SpecialKeysTab
 bool SpecialKeysPanelShouldCloseAfterKey(const SpecialKeysPanelState *state);
 
 typedef enum {
+    SpecialKeyCodeNone = 0,
+    SpecialKeyCodeShift = 0x10,
+    SpecialKeyCodeControl = 0x11,
+    SpecialKeyCodeAlt = 0x12,
     SpecialKeyCodeTab = 0x09,
     SpecialKeyCodeEscape = 0x1B,
     SpecialKeyCodePageUp = 0x21,
@@ -68,6 +72,7 @@ typedef enum {
     SpecialKeyCodeHome = 0x24,
     SpecialKeyCodeInsert = 0x2D,
     SpecialKeyCodeDelete = 0x2E,
+    SpecialKeyCodeN = 0x4E,
     SpecialKeyCodeF1 = 0x70,
     SpecialKeyCodeF2 = 0x71,
     SpecialKeyCodeF3 = 0x72,
@@ -81,5 +86,31 @@ typedef enum {
     SpecialKeyCodeF11 = 0x7A,
     SpecialKeyCodeF12 = 0x7B,
 } SpecialKeyCode;
+
+typedef enum {
+    SpecialKeysActionKey = 0,
+    SpecialKeysActionCursorToggle,
+} SpecialKeysAction;
+
+typedef struct {
+    const char *title;
+    SpecialKeysAction action;
+    SpecialKeyCode keyCode;
+} SpecialKeysActionDescriptor;
+
+const SpecialKeysActionDescriptor *SpecialKeysGetSpecialActions(size_t *count);
+
+typedef enum {
+    SpecialKeysSequenceKeyDown = 0,
+    SpecialKeysSequenceKeyUp,
+} SpecialKeysSequenceKeyAction;
+
+typedef struct {
+    SpecialKeyCode keyCode;
+    SpecialKeysSequenceKeyAction keyAction;
+    double delayAfter;
+} SpecialKeysSequenceEvent;
+
+const SpecialKeysSequenceEvent *SpecialKeysGetCursorToggleSequence(size_t *count);
 
 #endif /* SpecialKeysState_h */

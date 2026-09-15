@@ -55,16 +55,17 @@ static NSString *const SpecialKeysCellReuseIdentifier = @"SpecialKeysCell";
         @{ @"title": @"F11", @"code": @(SpecialKeyCodeF11) },
         @{ @"title": @"F12", @"code": @(SpecialKeyCodeF12) },
     ];
-    _specialKeys = @[
-        @{ @"title": @"Esc", @"code": @(SpecialKeyCodeEscape) },
-        @{ @"title": @"Tab", @"code": @(SpecialKeyCodeTab) },
-        @{ @"title": @"Insert", @"code": @(SpecialKeyCodeInsert) },
-        @{ @"title": @"Delete", @"code": @(SpecialKeyCodeDelete) },
-        @{ @"title": @"Home", @"code": @(SpecialKeyCodeHome) },
-        @{ @"title": @"End", @"code": @(SpecialKeyCodeEnd) },
-        @{ @"title": @"PgUp", @"code": @(SpecialKeyCodePageUp) },
-        @{ @"title": @"PgDn", @"code": @(SpecialKeyCodePageDown) },
-    ];
+    size_t specialActionCount;
+    const SpecialKeysActionDescriptor *specialActions = SpecialKeysGetSpecialActions(&specialActionCount);
+    NSMutableArray<NSDictionary<NSString *, id> *> *specialKeys = [NSMutableArray arrayWithCapacity:specialActionCount];
+    for (size_t i = 0; i < specialActionCount; i++) {
+        [specialKeys addObject:@{
+            @"title": [NSString stringWithUTF8String:specialActions[i].title],
+            @"code": @(specialActions[i].keyCode),
+            @"action": @(specialActions[i].action),
+        }];
+    }
+    _specialKeys = [specialKeys copy];
 }
 
 - (void)buildInterface {
@@ -309,9 +310,14 @@ static NSString *const SpecialKeysCellReuseIdentifier = @"SpecialKeysCell";
 
 - (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
     NSDictionary<NSString *, id> *key = self.currentKeys[indexPath.item];
-    [self.delegate specialKeysPanel:self
-                  didSelectKeyCode:[key[@"code"] shortValue]
-                             title:key[@"title"]];
+    if ([key[@"action"] integerValue] == SpecialKeysActionCursorToggle) {
+        [self.delegate specialKeysPanelDidSelectCursorToggle:self];
+    }
+    else {
+        [self.delegate specialKeysPanel:self
+                      didSelectKeyCode:[key[@"code"] shortValue]
+                                 title:key[@"title"]];
+    }
 }
 
 - (CGSize)collectionView:(UICollectionView *)collectionView
@@ -320,10 +326,10 @@ static NSString *const SpecialKeysCellReuseIdentifier = @"SpecialKeysCell";
     NSUInteger keyCount = self.currentKeys.count;
     NSUInteger columns;
     if (collectionView.bounds.size.width >= 520.0) {
-        columns = _panelState.selectedTab == SpecialKeysTabFunction ? 6 : 4;
+        columns = _panelState.selectedTab == SpecialKeysTabFunction ? 6 : 5;
     }
     else {
-        columns = _panelState.selectedTab == SpecialKeysTabFunction ? 4 : 2;
+        columns = _panelState.selectedTab == SpecialKeysTabFunction ? 4 : 3;
     }
 
     CGFloat horizontalInsets = collectionView.contentInset.left + collectionView.contentInset.right;

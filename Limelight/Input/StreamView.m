@@ -29,6 +29,17 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 #endif
 
 #if !TARGET_OS_TV
+static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
+    char keyAction = event->keyAction == SpecialKeysSequenceKeyDown ? KEY_ACTION_DOWN : KEY_ACTION_UP;
+    SpecialKeysLog(@"Special key %@: Cursor code=0x%02X hold=%.0fms",
+                   event->keyAction == SpecialKeysSequenceKeyDown ? @"DOWN" : @"UP",
+                   (unsigned int)(event->keyCode & 0xFF),
+                   event->delayAfter * 1000.0);
+    LiSendKeyboardEvent(event->keyCode, keyAction, 0);
+}
+#endif
+
+#if !TARGET_OS_TV
 @interface StreamView () <SpecialKeysPanelDelegate>
 @end
 #endif
@@ -567,6 +578,14 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 }
 
 #if !TARGET_OS_TV
+- (void)finishSpecialKeysPanelAction:(SpecialKeysPanel *)panel {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->specialKeysSessionActive && panel.isVisible && [panel shouldCloseAfterKey]) {
+            [panel hideAnimated:YES];
+        }
+    });
+}
+
 - (void)specialKeysPanel:(SpecialKeysPanel *)panel
         didSelectKeyCode:(short)keyCode
                    title:(NSString *)title {
@@ -584,13 +603,49 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
             SpecialKeysLog(@"Special key UP: %@ code=0x%02X hold=%.0fms",
                            title, (unsigned int)(keyCode & 0xFF), holdDuration * 1000.0);
 
-            dispatch_async(dispatch_get_main_queue(), ^{
-                StreamView *strongSelf = weakSelf;
-                if (strongSelf && strongSelf->specialKeysSessionActive &&
-                    panel.isVisible && [panel shouldCloseAfterKey]) {
-                    [panel hideAnimated:YES];
-                }
-            });
+            StreamView *strongSelf = weakSelf;
+            if (strongSelf) {
+                [strongSelf finishSpecialKeysPanelAction:panel];
+            }
+        });
+    });
+}
+
+- (void)specialKeysPanelDidSelectCursorToggle:(SpecialKeysPanel *)panel {
+    __weak StreamView *weakSelf = self;
+    dispatch_queue_t inputQueue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0);
+
+    dispatch_async(inputQueue, ^{
+        size_t eventCount;
+        const SpecialKeysSequenceEvent *events = SpecialKeysGetCursorToggleSequence(&eventCount);
+        size_t holdEventIndex = eventCount;
+        for (size_t i = 0; i < eventCount; i++) {
+            SendCursorToggleEvent(&events[i]);
+            if (events[i].delayAfter > 0) {
+                holdEventIndex = i;
+                break;
+            }
+        }
+
+        if (holdEventIndex == eventCount) {
+            StreamView *strongSelf = weakSelf;
+            if (strongSelf) {
+                [strongSelf finishSpecialKeysPanelAction:panel];
+            }
+            return;
+        }
+
+        NSTimeInterval holdDuration = events[holdEventIndex].delayAfter;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(holdDuration * NSEC_PER_SEC)), inputQueue, ^{
+            // Always send the entire release tail, even if the stream view is going away.
+            for (size_t i = holdEventIndex + 1; i < eventCount; i++) {
+                SendCursorToggleEvent(&events[i]);
+            }
+
+            StreamView *strongSelf = weakSelf;
+            if (strongSelf) {
+                [strongSelf finishSpecialKeysPanelAction:panel];
+            }
         });
     });
 }

@@ -8,6 +8,39 @@
 // Avoid classifying an exact 600 ms boundary as short due to binary floating-point rounding.
 static const double SpecialKeysTimingEpsilon = 0.000001;
 
+static const SpecialKeysActionDescriptor SpecialKeysSpecialActions[] = {
+    { "Esc", SpecialKeysActionKey, SpecialKeyCodeEscape },
+    { "Tab", SpecialKeysActionKey, SpecialKeyCodeTab },
+    { "Insert", SpecialKeysActionKey, SpecialKeyCodeInsert },
+    { "Delete", SpecialKeysActionKey, SpecialKeyCodeDelete },
+    { "Home", SpecialKeysActionKey, SpecialKeyCodeHome },
+    { "End", SpecialKeysActionKey, SpecialKeyCodeEnd },
+    { "PgUp", SpecialKeysActionKey, SpecialKeyCodePageUp },
+    { "PgDn", SpecialKeysActionKey, SpecialKeyCodePageDown },
+    { "Cursor", SpecialKeysActionCursorToggle, SpecialKeyCodeNone },
+};
+
+static const SpecialKeysSequenceEvent SpecialKeysCursorToggleSequence[] = {
+    { SpecialKeyCodeControl, SpecialKeysSequenceKeyDown, 0 },
+    { SpecialKeyCodeAlt, SpecialKeysSequenceKeyDown, 0 },
+    { SpecialKeyCodeShift, SpecialKeysSequenceKeyDown, 0 },
+    { SpecialKeyCodeN, SpecialKeysSequenceKeyDown, SPECIAL_KEYS_KEY_HOLD_DURATION },
+    { SpecialKeyCodeN, SpecialKeysSequenceKeyUp, 0 },
+    { SpecialKeyCodeShift, SpecialKeysSequenceKeyUp, 0 },
+    { SpecialKeyCodeAlt, SpecialKeysSequenceKeyUp, 0 },
+    { SpecialKeyCodeControl, SpecialKeysSequenceKeyUp, 0 },
+};
+
+const SpecialKeysActionDescriptor *SpecialKeysGetSpecialActions(size_t *count) {
+    *count = sizeof(SpecialKeysSpecialActions) / sizeof(SpecialKeysSpecialActions[0]);
+    return SpecialKeysSpecialActions;
+}
+
+const SpecialKeysSequenceEvent *SpecialKeysGetCursorToggleSequence(size_t *count) {
+    *count = sizeof(SpecialKeysCursorToggleSequence) / sizeof(SpecialKeysCursorToggleSequence[0]);
+    return SpecialKeysCursorToggleSequence;
+}
+
 void SpecialKeysGestureReset(SpecialKeysGestureState *state) {
     state->tracking = false;
     state->completed = false;

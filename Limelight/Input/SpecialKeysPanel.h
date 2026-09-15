@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)specialKeysPanel:(SpecialKeysPanel *)panel
         didSelectKeyCode:(short)keyCode
                    title:(NSString *)title;
+- (void)specialKeysPanelDidSelectCursorToggle:(SpecialKeysPanel *)panel;
 
 @end
 

@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "../Limelight/Input/SpecialKeysState.h"
 
@@ -95,6 +96,48 @@ static void testKeyCodesAndHoldDuration(void) {
     assert(SPECIAL_KEYS_KEY_HOLD_DURATION >= 0.060);
 }
 
+static void testCursorActionAndSequence(void) {
+    size_t actionCount;
+    const SpecialKeysActionDescriptor *actions = SpecialKeysGetSpecialActions(&actionCount);
+    assert(actionCount == 9);
+    assert(strcmp(actions[8].title, "Cursor") == 0);
+    assert(actions[8].action == SpecialKeysActionCursorToggle);
+    assert(actions[8].action != SpecialKeysActionKey);
+
+    const SpecialKeyCode expectedKeyCodes[] = {
+        SpecialKeyCodeEscape,
+        SpecialKeyCodeTab,
+        SpecialKeyCodeInsert,
+        SpecialKeyCodeDelete,
+        SpecialKeyCodeHome,
+        SpecialKeyCodeEnd,
+        SpecialKeyCodePageUp,
+        SpecialKeyCodePageDown,
+    };
+    for (size_t i = 0; i < 8; i++) {
+        assert(actions[i].action == SpecialKeysActionKey);
+        assert(actions[i].keyCode == expectedKeyCodes[i]);
+    }
+
+    size_t eventCount;
+    const SpecialKeysSequenceEvent *events = SpecialKeysGetCursorToggleSequence(&eventCount);
+    assert(eventCount == 8);
+    assert(events[0].keyCode == SpecialKeyCodeControl && events[0].keyAction == SpecialKeysSequenceKeyDown);
+    assert(events[1].keyCode == SpecialKeyCodeAlt && events[1].keyAction == SpecialKeysSequenceKeyDown);
+    assert(events[2].keyCode == SpecialKeyCodeShift && events[2].keyAction == SpecialKeysSequenceKeyDown);
+    assert(events[3].keyCode == SpecialKeyCodeN && events[3].keyAction == SpecialKeysSequenceKeyDown);
+    assert(events[3].delayAfter >= 0.060);
+    assert(events[4].keyCode == SpecialKeyCodeN && events[4].keyAction == SpecialKeysSequenceKeyUp);
+    assert(events[5].keyCode == SpecialKeyCodeShift && events[5].keyAction == SpecialKeysSequenceKeyUp);
+    assert(events[6].keyCode == SpecialKeyCodeAlt && events[6].keyAction == SpecialKeysSequenceKeyUp);
+    assert(events[7].keyCode == SpecialKeyCodeControl && events[7].keyAction == SpecialKeysSequenceKeyUp);
+    for (size_t i = 0; i < eventCount; i++) {
+        if (i != 3) {
+            assert(events[i].delayAfter == 0);
+        }
+    }
+}
+
 int main(void) {
     testThreeFingerShortTap();
     testThreeFingerLongPress();
@@ -102,6 +145,7 @@ int main(void) {
     testOneTwoAndFourFingersDoNotTrigger();
     testPanelSessionBehavior();
     testKeyCodesAndHoldDuration();
+    testCursorActionAndSequence();
     puts("Special Keys state tests passed");
     return 0;
 }
