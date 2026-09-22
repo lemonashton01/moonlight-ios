@@ -29,10 +29,11 @@ static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
 #endif
 
 #if !TARGET_OS_TV
-static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
+static void SendSpecialKeysSequenceEvent(const SpecialKeysSequenceEvent *event, NSString *title) {
     char keyAction = event->keyAction == SpecialKeysSequenceKeyDown ? KEY_ACTION_DOWN : KEY_ACTION_UP;
-    SpecialKeysLog(@"Special key %@: Cursor code=0x%02X hold=%.0fms",
+    SpecialKeysLog(@"Special key %@: %@ code=0x%02X hold=%.0fms",
                    event->keyAction == SpecialKeysSequenceKeyDown ? @"DOWN" : @"UP",
+                   title,
                    (unsigned int)(event->keyCode & 0xFF),
                    event->delayAfter * 1000.0);
     LiSendKeyboardEvent(event->keyCode, keyAction, 0);
@@ -78,6 +79,10 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
     NSUInteger specialKeysActiveTouchCount;
     SpecialKeysPanel* specialKeysPanel;
     BOOL specialKeysSessionActive;
+    ControllerSupport* specialKeysControllerSupport;
+    OnScreenControlsLevel specialKeysOscRestoreLevel;
+    BOOL specialKeysCursorVisibleEstimate;
+    BOOL specialKeysChordPending;
 #endif
 }
 
@@ -100,6 +105,9 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
 #if !TARGET_OS_TV
     SpecialKeysGestureReset(&specialKeysGestureState);
     specialKeysSessionActive = YES;
+    specialKeysControllerSupport = controllerSupport;
+    specialKeysCursorVisibleEstimate = NO;
+    specialKeysChordPending = NO;
 #endif
     
 #if TARGET_OS_TV
@@ -116,6 +124,8 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
     
     onScreenControls = [[OnScreenControls alloc] initWithView:self controllerSup:controllerSupport streamConfig:streamConfig];
     OnScreenControlsLevel level = (OnScreenControlsLevel)[settings.onscreenControls integerValue];
+    specialKeysOscRestoreLevel = level == OnScreenControlsLevelOff || level == OnScreenControlsLevelAuto ?
+                                 OnScreenControlsLevelFull : level;
     if (settings.absoluteTouchMode) {
         Log(LOG_I, @"On-screen controls disabled in absolute touch mode");
         [onScreenControls setLevel:OnScreenControlsLevelOff];
@@ -171,7 +181,11 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
 
 - (void)endStreamingSession {
 #if !TARGET_OS_TV
+    if ([onScreenControls getLevel] != OnScreenControlsLevelOff) {
+        [onScreenControls releaseAllInputs];
+    }
     specialKeysSessionActive = NO;
+    specialKeysCursorVisibleEstimate = NO;
     [specialKeysLongPressTimer invalidate];
     specialKeysLongPressTimer = nil;
     specialKeysActiveTouchCount = 0;
@@ -442,6 +456,11 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
             specialKeysPanel = [[SpecialKeysPanel alloc] initWithFrame:CGRectZero];
             specialKeysPanel.delegate = self;
         }
+        if ([onScreenControls getLevel] != OnScreenControlsLevelOff) {
+            [onScreenControls releaseAllInputs];
+        }
+        [specialKeysPanel setCursorVisibleEstimate:specialKeysCursorVisibleEstimate];
+        [specialKeysPanel setOscVisible:[onScreenControls getLevel] != OnScreenControlsLevelOff];
         UIView *hostView = self.window ?: self;
         [specialKeysPanel showInView:hostView];
     }
@@ -586,6 +605,15 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
     });
 }
 
+- (void)finishSpecialKeysChord:(SpecialKeysPanel *)panel {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->specialKeysChordPending = NO;
+        if (self->specialKeysSessionActive && panel.isVisible && [panel shouldCloseAfterKey]) {
+            [panel hideAnimated:YES];
+        }
+    });
+}
+
 - (void)specialKeysPanel:(SpecialKeysPanel *)panel
         didSelectKeyCode:(short)keyCode
                    title:(NSString *)title {
@@ -612,6 +640,12 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
 }
 
 - (void)specialKeysPanelDidSelectCursorToggle:(SpecialKeysPanel *)panel {
+    if (!specialKeysSessionActive || specialKeysChordPending) {
+        return;
+    }
+    specialKeysChordPending = YES;
+    specialKeysCursorVisibleEstimate = !specialKeysCursorVisibleEstimate;
+    [panel setCursorVisibleEstimate:specialKeysCursorVisibleEstimate];
     __weak StreamView *weakSelf = self;
     dispatch_queue_t inputQueue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0);
 
@@ -620,7 +654,7 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
         const SpecialKeysSequenceEvent *events = SpecialKeysGetCursorToggleSequence(&eventCount);
         size_t holdEventIndex = eventCount;
         for (size_t i = 0; i < eventCount; i++) {
-            SendCursorToggleEvent(&events[i]);
+            SendSpecialKeysSequenceEvent(&events[i], @"Cursor");
             if (events[i].delayAfter > 0) {
                 holdEventIndex = i;
                 break;
@@ -630,7 +664,7 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
         if (holdEventIndex == eventCount) {
             StreamView *strongSelf = weakSelf;
             if (strongSelf) {
-                [strongSelf finishSpecialKeysPanelAction:panel];
+                [strongSelf finishSpecialKeysChord:panel];
             }
             return;
         }
@@ -639,13 +673,66 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(holdDuration * NSEC_PER_SEC)), inputQueue, ^{
             // Always send the entire release tail, even if the stream view is going away.
             for (size_t i = holdEventIndex + 1; i < eventCount; i++) {
-                SendCursorToggleEvent(&events[i]);
+                SendSpecialKeysSequenceEvent(&events[i], @"Cursor");
             }
 
             StreamView *strongSelf = weakSelf;
             if (strongSelf) {
-                [strongSelf finishSpecialKeysPanelAction:panel];
+                [strongSelf finishSpecialKeysChord:panel];
             }
+        });
+    });
+}
+
+- (void)specialKeysPanelDidSelectOscToggle:(SpecialKeysPanel *)panel {
+    if (!specialKeysSessionActive) {
+        return;
+    }
+
+    OnScreenControlsLevel currentLevel = [onScreenControls getLevel];
+    BOOL showOsc = currentLevel == OnScreenControlsLevelOff;
+    if (showOsc) {
+        [specialKeysControllerSupport setOnScreenControllerActive:YES];
+        [onScreenControls setLevel:specialKeysOscRestoreLevel];
+    }
+    else {
+        specialKeysOscRestoreLevel = currentLevel;
+        [onScreenControls setLevel:OnScreenControlsLevelOff];
+        [specialKeysControllerSupport setOnScreenControllerActive:NO];
+    }
+    [panel setOscVisible:[onScreenControls getLevel] != OnScreenControlsLevelOff];
+    if ([panel shouldCloseAfterKey]) {
+        [panel hideAnimated:YES];
+    }
+}
+
+- (void)specialKeysPanelDidSelectAltF4:(SpecialKeysPanel *)panel {
+    if (!specialKeysSessionActive || specialKeysChordPending) {
+        return;
+    }
+    specialKeysChordPending = YES;
+    __weak StreamView *weakSelf = self;
+    dispatch_queue_t inputQueue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0);
+
+    dispatch_async(inputQueue, ^{
+        size_t eventCount;
+        const SpecialKeysSequenceEvent *events = SpecialKeysGetAltF4Sequence(&eventCount);
+        SendSpecialKeysSequenceEvent(&events[0], @"ALT+F4");
+        SendSpecialKeysSequenceEvent(&events[1], @"ALT+F4");
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(events[1].delayAfter * NSEC_PER_SEC)), inputQueue, ^{
+            for (size_t i = 2; i < eventCount; i++) {
+                SendSpecialKeysSequenceEvent(&events[i], @"ALT+F4");
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                StreamView *strongSelf = weakSelf;
+                if (strongSelf) {
+                    strongSelf->specialKeysChordPending = NO;
+                    if (strongSelf->specialKeysSessionActive && panel.isVisible && [panel shouldCloseAfterKey]) {
+                        [panel hideAnimated:YES];
+                    }
+                }
+            });
         });
     });
 }
@@ -833,7 +920,9 @@ static void SendCursorToggleEvent(const SpecialKeysSequenceEvent *event) {
 }
 
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event {
-    [touchHandler touchesCancelled:touches withEvent:event];
+    if (![onScreenControls handleTouchUpEvent:touches]) {
+        [touchHandler touchesCancelled:touches withEvent:event];
+    }
     [self handleMouseButtonEvent:BUTTON_ACTION_RELEASE
                       forTouches:touches
                        withEvent:event];

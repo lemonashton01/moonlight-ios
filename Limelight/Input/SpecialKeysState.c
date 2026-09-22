@@ -18,6 +18,8 @@ static const SpecialKeysActionDescriptor SpecialKeysSpecialActions[] = {
     { "PgUp", SpecialKeysActionKey, SpecialKeyCodePageUp },
     { "PgDn", SpecialKeysActionKey, SpecialKeyCodePageDown },
     { "Cursor", SpecialKeysActionCursorToggle, SpecialKeyCodeNone },
+    { "OSC", SpecialKeysActionOscToggle, SpecialKeyCodeNone },
+    { "ALT+F4", SpecialKeysActionAltF4, SpecialKeyCodeNone },
 };
 
 static const SpecialKeysSequenceEvent SpecialKeysCursorToggleSequence[] = {
@@ -31,6 +33,13 @@ static const SpecialKeysSequenceEvent SpecialKeysCursorToggleSequence[] = {
     { SpecialKeyCodeControl, SpecialKeysSequenceKeyUp, 0 },
 };
 
+static const SpecialKeysSequenceEvent SpecialKeysAltF4Sequence[] = {
+    { SpecialKeyCodeAlt, SpecialKeysSequenceKeyDown, 0 },
+    { SpecialKeyCodeF4, SpecialKeysSequenceKeyDown, SPECIAL_KEYS_KEY_HOLD_DURATION },
+    { SpecialKeyCodeF4, SpecialKeysSequenceKeyUp, 0 },
+    { SpecialKeyCodeAlt, SpecialKeysSequenceKeyUp, 0 },
+};
+
 const SpecialKeysActionDescriptor *SpecialKeysGetSpecialActions(size_t *count) {
     *count = sizeof(SpecialKeysSpecialActions) / sizeof(SpecialKeysSpecialActions[0]);
     return SpecialKeysSpecialActions;
@@ -39,6 +48,11 @@ const SpecialKeysActionDescriptor *SpecialKeysGetSpecialActions(size_t *count) {
 const SpecialKeysSequenceEvent *SpecialKeysGetCursorToggleSequence(size_t *count) {
     *count = sizeof(SpecialKeysCursorToggleSequence) / sizeof(SpecialKeysCursorToggleSequence[0]);
     return SpecialKeysCursorToggleSequence;
+}
+
+const SpecialKeysSequenceEvent *SpecialKeysGetAltF4Sequence(size_t *count) {
+    *count = sizeof(SpecialKeysAltF4Sequence) / sizeof(SpecialKeysAltF4Sequence[0]);
+    return SpecialKeysAltF4Sequence;
 }
 
 void SpecialKeysGestureReset(SpecialKeysGestureState *state) {

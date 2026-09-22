@@ -43,6 +43,7 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 #define EMULATING_SPECIAL    0x2
     
     bool _oscEnabled;
+    bool _oscRuntimeOverride;
     char _controllerNumbers;
     bool _multiController;
     bool _swapABXYButtons;
@@ -478,6 +479,13 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 
 -(BOOL) reportControllerArrival:(Controller*) limeController
 {
+    // The OSC shares player 0 with a physical gamepad when one is connected.
+    // In that case the physical controller owns the host arrival event.
+    Controller *physicalPlayerOne = [_controllers objectForKey:@0];
+    if (limeController == _oscController && physicalPlayerOne != nil) {
+        return [self reportControllerArrival:physicalPlayerOne];
+    }
+
     // Only report arrival once
     if (limeController.reportedArrival) {
         return YES;
@@ -918,6 +926,9 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 
 -(void) updateAutoOnScreenControlMode
 {
+    if (_oscRuntimeOverride) {
+        return;
+    }
     // Auto on-screen control support may not be enabled
     if (_osc == NULL) {
         return;
@@ -982,9 +993,12 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             limeController.supportedEmulationFlags = EMULATING_SPECIAL | EMULATING_SELECT;
             limeController.gamepad = controller;
 
-            // If this is player 0, it shares state with the OSC
-            limeController.mergedWithController = _oscController;
-            _oscController.mergedWithController = limeController;
+            // Player 0 alone shares state with the OSC. Merging a second
+            // physical controller would duplicate its input on player 0.
+            if (i == 0) {
+                limeController.mergedWithController = _oscController;
+                _oscController.mergedWithController = limeController;
+            }
             
             if (@available(iOS 13.0, tvOS 13.0, *)) {
                 if (controller.extendedGamepad != nil &&
@@ -1017,6 +1031,27 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
 
 -(Controller*) getOscController {
     return _oscController;
+}
+
+-(void) setOnScreenControllerActive:(BOOL)active {
+    _oscRuntimeOverride = YES;
+    if (_oscEnabled == active) {
+        return;
+    }
+
+    _oscEnabled = active;
+    // updateFinished() sends the current merged state of player 0. It preserves
+    // physical gamepad input when the OSC is hidden or shown mid-stream.
+    Controller *physicalPlayerOne = [_controllers objectForKey:@0];
+    if (physicalPlayerOne != nil) {
+        [self updateFinished:physicalPlayerOne];
+    }
+    else if (active) {
+        [self updateFinished:_oscController];
+    }
+    else {
+        LiSendMultiControllerEvent(0, [self getActiveGamepadMask], 0, 0, 0, 0, 0, 0, 0);
+    }
 }
 
 +(bool) isSupportedGamepad:(GCController*) controller {
@@ -1168,6 +1203,9 @@ static const double MOUSE_SPEED_DIVISOR = 1.25;
             // Inform the server of the updated active gamepads before removing this controller
             [self updateFinished:limeController];
             [self->_controllers removeObjectForKey:[NSNumber numberWithInteger:controller.playerIndex]];
+            if (controller.playerIndex == 0 && self->_oscEnabled) {
+                [self updateFinished:self->_oscController];
+            }
             
             // Re-evaluate the on-screen control mode
             [self updateAutoOnScreenControlMode];

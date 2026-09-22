@@ -15,6 +15,8 @@ NS_ASSUME_NONNULL_BEGIN
         didSelectKeyCode:(short)keyCode
                    title:(NSString *)title;
 - (void)specialKeysPanelDidSelectCursorToggle:(SpecialKeysPanel *)panel;
+- (void)specialKeysPanelDidSelectOscToggle:(SpecialKeysPanel *)panel;
+- (void)specialKeysPanelDidSelectAltF4:(SpecialKeysPanel *)panel;
 
 @end
 
@@ -28,6 +30,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)hideAnimated:(BOOL)animated;
 - (void)resetForSession;
 - (BOOL)shouldCloseAfterKey;
+- (void)setCursorVisibleEstimate:(BOOL)visible;
+- (void)setOscVisible:(BOOL)visible;
 
 @end
 

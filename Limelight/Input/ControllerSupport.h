@@ -27,6 +27,7 @@
 -(void) initAutoOnScreenControlMode:(OnScreenControls*)osc;
 -(void) cleanup;
 -(Controller*) getOscController;
+-(void) setOnScreenControllerActive:(BOOL)active;
 
 -(void) updateLeftStick:(Controller*)controller x:(short)x y:(short)y;
 -(void) updateRightStick:(Controller*)controller x:(short)x y:(short)y;

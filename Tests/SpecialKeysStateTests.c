@@ -99,10 +99,16 @@ static void testKeyCodesAndHoldDuration(void) {
 static void testCursorActionAndSequence(void) {
     size_t actionCount;
     const SpecialKeysActionDescriptor *actions = SpecialKeysGetSpecialActions(&actionCount);
-    assert(actionCount == 9);
+    assert(actionCount == 11);
     assert(strcmp(actions[8].title, "Cursor") == 0);
     assert(actions[8].action == SpecialKeysActionCursorToggle);
     assert(actions[8].action != SpecialKeysActionKey);
+    assert(strcmp(actions[9].title, "OSC") == 0);
+    assert(actions[9].action == SpecialKeysActionOscToggle);
+    assert(actions[9].keyCode == SpecialKeyCodeNone);
+    assert(strcmp(actions[10].title, "ALT+F4") == 0);
+    assert(actions[10].action == SpecialKeysActionAltF4);
+    assert(actions[10].keyCode == SpecialKeyCodeNone);
 
     const SpecialKeyCode expectedKeyCodes[] = {
         SpecialKeyCodeEscape,
@@ -138,6 +144,30 @@ static void testCursorActionAndSequence(void) {
     }
 }
 
+static void testAltF4Sequence(void) {
+    size_t eventCount;
+    const SpecialKeysSequenceEvent *events = SpecialKeysGetAltF4Sequence(&eventCount);
+    assert(eventCount == 4);
+    assert(events[0].keyCode == SpecialKeyCodeAlt && events[0].keyAction == SpecialKeysSequenceKeyDown);
+    assert(events[1].keyCode == SpecialKeyCodeF4 && events[1].keyAction == SpecialKeysSequenceKeyDown);
+    assert(events[1].delayAfter >= 0.060);
+    assert(events[2].keyCode == SpecialKeyCodeF4 && events[2].keyAction == SpecialKeysSequenceKeyUp);
+    assert(events[3].keyCode == SpecialKeyCodeAlt && events[3].keyAction == SpecialKeysSequenceKeyUp);
+
+    // The sequence leaves neither the function key nor Alt held.
+    unsigned int held = 0;
+    for (size_t i = 0; i < eventCount; i++) {
+        unsigned int bit = events[i].keyCode == SpecialKeyCodeAlt ? 1u : 2u;
+        if (events[i].keyAction == SpecialKeysSequenceKeyDown) {
+            held |= bit;
+        }
+        else {
+            held &= ~bit;
+        }
+    }
+    assert(held == 0);
+}
+
 int main(void) {
     testThreeFingerShortTap();
     testThreeFingerLongPress();
@@ -146,6 +176,7 @@ int main(void) {
     testPanelSessionBehavior();
     testKeyCodesAndHoldDuration();
     testCursorActionAndSequence();
+    testAltF4Sequence();
     puts("Special Keys state tests passed");
     return 0;
 }

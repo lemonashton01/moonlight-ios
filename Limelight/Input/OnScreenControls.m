@@ -165,6 +165,9 @@ static float L3_Y;
 }
 
 - (void) setLevel:(OnScreenControlsLevel)level {
+    if (_visible && level == OnScreenControlsLevelOff && _level != OnScreenControlsLevelOff) {
+        [self releaseAllInputs];
+    }
     _level = level;
     
     // Only update controls if we're showing, otherwise
@@ -176,6 +179,36 @@ static float L3_Y;
 
 - (OnScreenControlsLevel) getLevel {
     return _level;
+}
+
+- (void) releaseAllInputs {
+    [_controllerSupport clearButtonFlag:_controller flags:_controller.lastButtonFlags];
+    [_controllerSupport updateTriggers:_controller left:0 right:0];
+    [_controllerSupport updateLeftStick:_controller x:0 y:0];
+    [_controllerSupport updateRightStick:_controller x:0 y:0];
+    [_controllerSupport updateFinished:_controller];
+
+    // Keep already-consumed fingers away from the touch/mouse handlers until
+    // they lift, even though the OSC no longer owns any pressed controls.
+    UITouch *activeTouches[] = { _aTouch, _bTouch, _xTouch, _yTouch, _dpadTouch,
+                                 _lsTouch, _rsTouch, _startTouch, _selectTouch,
+                                 _l1Touch, _l2Touch, _l3Touch, _r1Touch, _r2Touch, _r3Touch };
+    for (size_t i = 0; i < sizeof(activeTouches) / sizeof(activeTouches[0]); i++) {
+        UITouch *touch = activeTouches[i];
+        if (touch != nil && ![_deadTouches containsObject:touch]) {
+            [_deadTouches addObject:touch];
+        }
+    }
+    _aTouch = _bTouch = _xTouch = _yTouch = nil;
+    _dpadTouch = _lsTouch = _rsTouch = nil;
+    _startTouch = _selectTouch = nil;
+    _l1Touch = _l2Touch = _l3Touch = nil;
+    _r1Touch = _r2Touch = _r3Touch = nil;
+    l3Set = r3Set = NO;
+    l3TouchStart = r3TouchStart = nil;
+    _l3Button.borderWidth = _r3Button.borderWidth = 0;
+    _leftStick.position = _leftStickBackground.position;
+    _rightStick.position = _rightStickBackground.position;
 }
 
 - (void) updateControls {

@@ -90,6 +90,8 @@ typedef enum {
 typedef enum {
     SpecialKeysActionKey = 0,
     SpecialKeysActionCursorToggle,
+    SpecialKeysActionOscToggle,
+    SpecialKeysActionAltF4,
 } SpecialKeysAction;
 
 typedef struct {
@@ -112,5 +114,6 @@ typedef struct {
 } SpecialKeysSequenceEvent;
 
 const SpecialKeysSequenceEvent *SpecialKeysGetCursorToggleSequence(size_t *count);
+const SpecialKeysSequenceEvent *SpecialKeysGetAltF4Sequence(size_t *count);
 
 #endif /* SpecialKeysState_h */
