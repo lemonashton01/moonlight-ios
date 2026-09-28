@@ -1,6 +1,7 @@
 #import "PlayniteReadinessMonitor.h"
 
 #import <CommonCrypto/CommonHMAC.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
@@ -9,6 +10,7 @@
 #include <string.h>
 
 #import "Logger.h"
+#import "PlayniteStartupPreferences.h"
 #import "ReadinessFrameMatcher.h"
 #import "StreamView.h"
 #import "Utils.h"
@@ -31,6 +33,15 @@ static NSString *PlayniteHexString(const uint8_t *bytes, NSUInteger length) {
     }
     output[length * 2] = '\0';
     return [NSString stringWithUTF8String:output];
+}
+
+static NSString *PlayniteKeyFingerprint(NSData *keyBytes) {
+    if (keyBytes.length == 0) {
+        return nil;
+    }
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(keyBytes.bytes, (CC_LONG)keyBytes.length, digest);
+    return [PlayniteHexString(digest, 6) uppercaseString];
 }
 
 static NSData *PlayniteDataFromHex(NSString *value) {
@@ -112,6 +123,15 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
     BOOL _started;
 }
 
++ (NSString *)storedSharedKey {
+    return [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY] ?: @"";
+}
+
++ (nullable NSString *)storedKeyFingerprint {
+    NSData *keyBytes = [[self storedSharedKey] dataUsingEncoding:NSUTF8StringEncoding];
+    return PlayniteKeyFingerprint(keyBytes);
+}
+
 - (instancetype)initWithHostAddress:(NSString *)hostAddress
                          sharedKey:(NSString *)sharedKey
                          streamView:(StreamView *)streamView
@@ -160,6 +180,29 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
            message.length,
            digest);
     return [NSData dataWithBytes:digest length:sizeof(digest)];
+}
+
+- (NSMutableURLRequest *)signedReadinessRequest {
+    if (_hostAddress.length == 0 || _sharedKey.length < 16 || _sessionId.length != 32) {
+        return nil;
+    }
+    NSURL *url = [self readinessURL];
+    NSString *requestText = [NSString stringWithFormat:@"GET\n/moonlight/ready\n%@", _sessionId];
+    NSData *requestSignature = [self signatureForUTF8String:requestText];
+    if (url == nil || requestSignature.length != CC_SHA256_DIGEST_LENGTH) {
+        return nil;
+    }
+    NSString *signatureHex = PlayniteHexString(requestSignature.bytes, requestSignature.length);
+    if (signatureHex == nil) {
+        return nil;
+    }
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:PlayniteRequestTimeout];
+    request.HTTPMethod = @"GET";
+    request.HTTPShouldHandleCookies = NO;
+    [request setValue:signatureHex forHTTPHeaderField:@"X-Moonlight-Auth"];
+    return request;
 }
 
 - (PlayniteBridgeConnectionTestResult)connectionTestResultForData:(NSData *)data
@@ -215,15 +258,8 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
 
     PlayniteReadinessMonitor *probe = [[PlayniteReadinessMonitor alloc]
         initWithHostAddress:hostAddress sharedKey:sharedKey streamView:nil readinessConfirmed:nil];
-    NSURL *url = [probe readinessURL];
-    NSString *requestText = [NSString stringWithFormat:@"GET\n/moonlight/ready\n%@", probe->_sessionId];
-    NSData *requestSignature = [probe signatureForUTF8String:requestText];
-    if (requestSignature.length != CC_SHA256_DIGEST_LENGTH) {
-        dispatch_async(dispatch_get_main_queue(), ^{ completion(PlayniteBridgeConnectionTestInvalidResponse); });
-        return;
-    }
-    NSString *signatureHex = PlayniteHexString(requestSignature.bytes, requestSignature.length);
-    if (url == nil || signatureHex == nil) {
+    NSMutableURLRequest *request = [probe signedReadinessRequest];
+    if (request == nil) {
         dispatch_async(dispatch_get_main_queue(), ^{ completion(PlayniteBridgeConnectionTestInvalidResponse); });
         return;
     }
@@ -234,12 +270,6 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
     configuration.timeoutIntervalForRequest = PlayniteRequestTimeout;
     configuration.timeoutIntervalForResource = PlayniteRequestTimeout;
     NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:probe delegateQueue:nil];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
-                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-                                                       timeoutInterval:PlayniteRequestTimeout];
-    request.HTTPMethod = @"GET";
-    request.HTTPShouldHandleCookies = NO;
-    [request setValue:signatureHex forHTTPHeaderField:@"X-Moonlight-Auth"];
     NSURLSessionDataTask *task = [session dataTaskWithRequest:request
                                             completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         PlayniteBridgeConnectionTestResult result = [probe connectionTestResultForData:data
@@ -268,9 +298,10 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
         self->_session = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:nil];
         Log(LOG_I, @"Playnite Ready Bridge monitor started for this launch session");
 #if DEBUG
-        NSLog(@"[PlayniteDiag] Ready Bridge monitor active: sharedKeyPresent=%@ sharedKeyLength=%lu uptime=%.3f",
+        NSLog(@"[PlayniteDiag] Ready Bridge monitor active: sharedKeyPresent=%@ sharedKeyLength=%lu keyFingerprint=%@ uptime=%.3f",
               self->_sharedKey.length >= 16 ? @"yes" : @"no",
               (unsigned long)self->_sharedKey.length,
+              PlayniteKeyFingerprint(self->_sharedKeyData) ?: @"none",
               [NSProcessInfo processInfo].systemUptime);
 #endif
         [self poll];
@@ -287,28 +318,12 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
         return;
     }
 
-    NSURL *url = [self readinessURL];
-    if (url == nil) {
-        [self recordError:@"Could not create the Playnite readiness URL"];
+    NSMutableURLRequest *request = [self signedReadinessRequest];
+    if (request == nil) {
+        [self recordError:@"Could not create the authenticated Playnite readiness request"];
         [self scheduleNextPoll];
         return;
     }
-
-    NSString *requestText = [NSString stringWithFormat:@"GET\n/moonlight/ready\n%@", _sessionId];
-    NSData *requestSignature = [self signatureForUTF8String:requestText];
-    NSString *requestSignatureHex = PlayniteHexString(requestSignature.bytes, requestSignature.length);
-    if (requestSignatureHex == nil) {
-        [self recordError:@"Could not sign the Playnite readiness request"];
-        [self scheduleNextPoll];
-        return;
-    }
-
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
-                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-                                                       timeoutInterval:PlayniteRequestTimeout];
-    request.HTTPMethod = @"GET";
-    request.HTTPShouldHandleCookies = NO;
-    [request setValue:requestSignatureHex forHTTPHeaderField:@"X-Moonlight-Auth"];
 
     _requestCount++;
     _requestStartedAt = [NSProcessInfo processInfo].systemUptime;

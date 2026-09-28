@@ -431,7 +431,8 @@ BOOL isCustomResolution(CGSize res) {
 }
 
 - (void)updatePlayniteKeyStatus {
-    NSString *key = [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY];
+    NSString *key = [PlayniteReadinessMonitor storedSharedKey];
+    NSString *fingerprint = [PlayniteReadinessMonitor storedKeyFingerprint];
     if (key.length >= 16) {
         NSString *lengthText = [NSString stringWithFormat:@"%lu", (unsigned long)key.length];
         _playniteReadinessKeyStatus.text = [NSString stringWithFormat:@"%@%@%@",
@@ -443,6 +444,10 @@ BOOL isCustomResolution(CGSize res) {
     else {
         _playniteReadinessKeyStatus.text = PlayniteSettingsText(
             @"Ready Bridge key: Not configured", @"Ready Bridge key: 未設定");
+    }
+    if (fingerprint != nil) {
+        _playniteReadinessKeyStatus.text = [_playniteReadinessKeyStatus.text stringByAppendingFormat:
+            @"\nKey fingerprint: %@", fingerprint];
     }
     [self.view setNeedsLayout];
 }
@@ -513,7 +518,7 @@ BOOL isCustomResolution(CGSize res) {
         if (strongSelf == nil) return;
         strongSelf->_playniteTestInProgress = NO;
         strongSelf->_playniteTestButton.enabled = YES;
-        NSString *currentKey = [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY];
+        NSString *currentKey = [PlayniteReadinessMonitor storedSharedKey];
         if (![currentKey isEqualToString:sharedKey]) {
             [strongSelf showPlayniteTestStatus:PlayniteSettingsText(
                 @"Key changed. Run the connection test again.",
@@ -549,7 +554,7 @@ BOOL isCustomResolution(CGSize res) {
 
 - (void)testPlayniteBridge {
     if (_playniteTestInProgress) return;
-    NSString *key = [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY];
+    NSString *key = [PlayniteReadinessMonitor storedSharedKey];
     if (key.length < 16) {
         [self showPlayniteTestStatus:PlayniteSettingsText(
             @"Shared key is not configured.", @"共有キーが未設定です。") success:NO];

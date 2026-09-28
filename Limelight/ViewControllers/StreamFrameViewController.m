@@ -513,7 +513,7 @@
         _playniteReadinessMonitor = nil;
     }
 
-    NSString *sharedKey = [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY] ?: @"";
+    NSString *sharedKey = [PlayniteReadinessMonitor storedSharedKey];
 #if DEBUG
     NSLog(@"[PlayniteDiag] Ready Bridge key read from NSUserDefaults: present=%@ length=%lu",
           sharedKey.length >= 16 ? @"yes" : @"no",

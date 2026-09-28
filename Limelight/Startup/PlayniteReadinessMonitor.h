@@ -16,6 +16,8 @@ typedef NS_ENUM(NSInteger, PlayniteBridgeConnectionTestResult) {
 // successive matches against the rendered Moonlight stream before confirming readiness.
 @interface PlayniteReadinessMonitor : NSObject <NSURLSessionTaskDelegate>
 
++ (NSString *)storedSharedKey;
++ (nullable NSString *)storedKeyFingerprint;
 - (instancetype)initWithHostAddress:(NSString *)hostAddress
                          sharedKey:(NSString *)sharedKey
                          streamView:(nullable StreamView *)streamView
