@@ -5,7 +5,6 @@
 #import <VideoToolbox/VideoToolbox.h>
 
 #import "Logger.h"
-#import "PlayniteStartupPreferences.h"
 
 static const NSTimeInterval PlayniteReadinessTimeout = 60.0;
 static const NSTimeInterval PlayniteFadeToBlackDuration = 0.4;
@@ -32,6 +31,8 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
     dispatch_block_t _timeoutWorkItem;
 
     BOOL _playbackStarted;
+    BOOL _streamConnectionStarted;
+    BOOL _playRequested;
     BOOL _videoFinished;
     BOOL _streamReady;
     BOOL _readinessConfirmed;
@@ -166,29 +167,6 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
     [self resetReadinessTimeout];
 #if DEBUG
     AVAudioSession *audioSession = [AVAudioSession sharedInstance];
-    NSInteger diagnosticMode = [[NSUserDefaults standardUserDefaults] integerForKey:PLAYNITE_STARTUP_DIAGNOSTIC_MODE_KEY];
-    if (diagnosticMode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_CATEGORY ||
-        diagnosticMode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_ACTIVE) {
-        NSTimeInterval prepareStart = [NSProcessInfo processInfo].systemUptime;
-        NSError *categoryError = nil;
-        BOOL categorySet = [audioSession setCategory:AVAudioSessionCategoryPlayback
-                                        withOptions:AVAudioSessionCategoryOptionMixWithOthers
-                                              error:&categoryError];
-        NSLog(@"[PlayniteDiag] startup audio category prepared success=%@ errorCode=%ld durationMs=%.1f category=%@ options=0x%lx uptime=%.3f",
-              categorySet ? @"yes" : @"no", (long)categoryError.code,
-              ([NSProcessInfo processInfo].systemUptime - prepareStart) * 1000.0,
-              audioSession.category, (unsigned long)audioSession.categoryOptions,
-              [NSProcessInfo processInfo].systemUptime);
-        if (diagnosticMode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_ACTIVE && categorySet) {
-            NSTimeInterval activationStart = [NSProcessInfo processInfo].systemUptime;
-            NSError *activationError = nil;
-            BOOL activated = [audioSession setActive:YES error:&activationError];
-            NSLog(@"[PlayniteDiag] startup audio session activated success=%@ errorCode=%ld durationMs=%.1f uptime=%.3f",
-                  activated ? @"yes" : @"no", (long)activationError.code,
-                  ([NSProcessInfo processInfo].systemUptime - activationStart) * 1000.0,
-                  [NSProcessInfo processInfo].systemUptime);
-        }
-    }
     NSLog(@"[PlayniteDiag] AVPlayer setup begin uptime=%.3f mainThread=%@ audioCategory=%@ audioOptions=0x%lx otherAudioPlaying=%@",
           [NSProcessInfo processInfo].systemUptime,
           [NSThread isMainThread] ? @"yes" : @"no",
@@ -314,12 +292,10 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
                                                      userInfo:nil
                                                       repeats:YES];
     [[NSRunLoop mainRunLoop] addTimer:_mainThreadWatchdogTimer forMode:NSRunLoopCommonModes];
-    NSLog(@"[PlayniteDiag] AVPlayer play request uptime=%.3f mainThread=%@ playerCount=1",
-          [NSProcessInfo processInfo].systemUptime,
-          [NSThread isMainThread] ? @"yes" : @"no");
+    NSLog(@"[PlayniteDiag] AVPlayer ready; waiting for Moonlight audio setup uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
 #endif
-    Log(LOG_I, @"Starting bundled Playnite Horizon Scan video");
-    [_player play];
+    [self playAfterStreamConnectionIfReady];
 }
 
 - (void)mainThreadWatchdogFired:(NSTimer *)timer {
@@ -766,7 +742,8 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
 }
 
 - (void)pausePlaybackForAppDeactivation {
-    _wasPlayingWhenInactive = _player.rate > 0;
+    // A play request can still be pending while AVPlayer reports rate == 0.
+    _wasPlayingWhenInactive = _playRequested && !_videoFinished && !_disposed;
 #if DEBUG
     [self logPlaybackDiagnostics:@"app will resign active"];
 #endif
@@ -775,23 +752,36 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
     }
 }
 
-- (void)resumePlaybackAfterStreamConnectionStarted {
-    // SDL opens and activates its audio device during connection startup.
-    // On iOS this can leave the already-playing startup AVPlayer paused, even
-    // though its item is fully buffered and the app remains active. Retry only
-    // once, after Moonlight has completed its normal audio setup.
-    if (_disposed || _videoFinished || !_playbackStarted || _player == nil ||
-        [UIApplication sharedApplication].applicationState != UIApplicationStateActive ||
-        _player.currentItem.status != AVPlayerItemStatusReadyToPlay ||
-        _player.timeControlStatus != AVPlayerTimeControlStatusPaused || _player.rate != 0) {
+- (void)playAfterStreamConnectionIfReady {
+    // SDL opens/activates its audio device before connectionStarted. Starting
+    // AVPlayer earlier lets that session change pause the intro mid-playback.
+    AVPlayerItem *item = _player.currentItem;
+    if (!_streamConnectionStarted || !_playbackStarted || _playRequested ||
+        _disposed || _videoFinished || self.superview == nil || item == nil ||
+        item.status == AVPlayerItemStatusFailed ||
+        [UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
         return;
     }
+    CMTime duration = item.duration;
+    if (CMTIME_IS_NUMERIC(duration) && CMTimeCompare(_player.currentTime, duration) >= 0) {
+        return;
+    }
+    _playRequested = YES;
 #if DEBUG
-    [self logPlaybackDiagnostics:@"resuming after Moonlight connection started"];
-    NSLog(@"[PlayniteDiag] AVPlayer play retry after Moonlight audio initialization uptime=%.3f",
+    [self logPlaybackDiagnostics:@"starting after Moonlight audio initialization"];
+    NSLog(@"[PlayniteDiag] AVPlayer play request after Moonlight audio initialization uptime=%.3f",
           [NSProcessInfo processInfo].systemUptime);
 #endif
+    Log(LOG_I, @"Starting bundled Playnite Horizon Scan video");
     [_player play];
+}
+
+- (void)streamConnectionStarted {
+    if (_streamConnectionStarted || _disposed) {
+        return;
+    }
+    _streamConnectionStarted = YES;
+    [self playAfterStreamConnectionIfReady];
 }
 
 - (void)resumePlaybackAfterAppActivation {
@@ -802,6 +792,7 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
         [_player play];
     }
     _wasPlayingWhenInactive = NO;
+    [self playAfterStreamConnectionIfReady];
 }
 
 - (void)dispose {

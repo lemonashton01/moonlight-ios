@@ -58,6 +58,7 @@
     PlayniteStartupOverlay *_playniteStartupOverlay;
     PlayniteReadinessMonitor *_playniteReadinessMonitor;
     BOOL _playniteStartupModeResolved;
+    BOOL _playniteConnectionStarted;
     BOOL _playniteStreamReady;
 #endif
 }
@@ -409,7 +410,9 @@
 #endif
     Log(LOG_I, @"Connection started");
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self->_playniteStartupOverlay resumePlaybackAfterStreamConnectionStarted];
+#if !TARGET_OS_TV
+        self->_playniteConnectionStarted = YES;
+#endif
         // Leave the spinner spinning until it's obscured by
         // the first frame of video.
         self->_stageLabel.hidden = YES;
@@ -426,6 +429,9 @@
                                                                      userInfo:nil
                                                                       repeats:YES];
         }
+#if !TARGET_OS_TV
+        [self->_playniteStartupOverlay streamConnectionStarted];
+#endif
     });
 }
 
@@ -488,6 +494,9 @@
         [overlay markStreamReady];
     }
     [overlay startPlayback];
+    if (_playniteConnectionStarted) {
+        [overlay streamConnectionStarted];
+    }
 #if DEBUG
     NSLog(@"[PlayniteDiag] startup overlay attached; readiness monitor setup follows uptime=%.3f",
           [NSProcessInfo processInfo].systemUptime);

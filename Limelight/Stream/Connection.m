@@ -8,7 +8,6 @@
 
 #import "Connection.h"
 #import "Utils.h"
-#import "PlayniteStartupPreferences.h"
 
 #import <VideoToolbox/VideoToolbox.h>
 
@@ -43,9 +42,6 @@ static SDL_AudioDeviceID audioDevice;
 static OPUS_MULTISTREAM_CONFIGURATION audioConfig;
 static void* audioBuffer;
 static int audioFrameSize;
-#if DEBUG
-static BOOL diagnosticStreamAudioSuppressed;
-#endif
 
 static VideoDecoderRenderer* renderer;
 
@@ -212,14 +208,6 @@ int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, v
     NSLog(@"[PlayniteDiag] Moonlight audio init begin category=%@ mode=%@ uptime=%.3f",
           diagnosticAudioSession.category, diagnosticAudioSession.mode,
           [NSProcessInfo processInfo].systemUptime);
-    diagnosticStreamAudioSuppressed =
-        [[NSUserDefaults standardUserDefaults] integerForKey:PLAYNITE_STARTUP_DIAGNOSTIC_MODE_KEY] ==
-        PLAYNITE_DIAGNOSTIC_NO_STREAM_AUDIO;
-    if (diagnosticStreamAudioSuppressed) {
-        NSLog(@"[PlayniteDiag] diagnostic mode: Moonlight stream audio suppressed uptime=%.3f",
-              [NSProcessInfo processInfo].systemUptime);
-        return 0;
-    }
 #endif
     
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
@@ -299,12 +287,6 @@ int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, v
 
 void ArCleanup(void)
 {
-#if DEBUG
-    if (diagnosticStreamAudioSuppressed) {
-        diagnosticStreamAudioSuppressed = NO;
-        return;
-    }
-#endif
     if (opusDecoder != NULL) {
         opus_multistream_decoder_destroy(opusDecoder);
         opusDecoder = NULL;
@@ -325,11 +307,6 @@ void ArCleanup(void)
 
 void ArDecodeAndPlaySample(char* sampleData, int sampleLength)
 {
-#if DEBUG
-    if (diagnosticStreamAudioSuppressed) {
-        return;
-    }
-#endif
     int decodeLen;
     
     // Don't queue if there's already more than 30 ms of audio data waiting

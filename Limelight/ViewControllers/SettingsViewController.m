@@ -26,9 +26,6 @@
     UISwitch *_playniteStartupSwitch;
     UITextField *_playniteReadinessKeyField;
     UILabel *_playniteReadinessDescription;
-#if DEBUG
-    UIButton *_playniteDiagnosticModeButton;
-#endif
 #endif
 }
 
@@ -93,11 +90,7 @@ CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
 #if !TARGET_OS_TV
         if (view == _playniteStartupLabel || view == _playniteStartupDescription ||
             view == _playniteStartupSwitch || view == _playniteReadinessKeyField ||
-            view == _playniteReadinessDescription
-#if DEBUG
-            || view == _playniteDiagnosticModeButton
-#endif
-            ) {
+            view == _playniteReadinessDescription) {
             continue;
         }
 #endif
@@ -139,10 +132,6 @@ CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
                                                          contentWidth,
                                                          readinessDescriptionHeight);
         highestViewY = CGRectGetMaxY(_playniteReadinessDescription.frame);
-#if DEBUG
-        _playniteDiagnosticModeButton.frame = CGRectMake(left, highestViewY + 12, contentWidth, 40);
-        highestViewY = CGRectGetMaxY(_playniteDiagnosticModeButton.frame);
-#endif
     }
 #endif
     
@@ -362,64 +351,8 @@ BOOL isCustomResolution(CGSize res) {
     _playniteReadinessDescription.textColor = [UIColor lightGrayColor];
     _playniteReadinessDescription.numberOfLines = 0;
     [self.scrollView addSubview:_playniteReadinessDescription];
-#if DEBUG
-    _playniteDiagnosticModeButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    _playniteDiagnosticModeButton.backgroundColor = [UIColor colorWithWhite:0.22 alpha:1];
-    _playniteDiagnosticModeButton.layer.cornerRadius = 8;
-    _playniteDiagnosticModeButton.titleLabel.font = [UIFont systemFontOfSize:14];
-    [_playniteDiagnosticModeButton addTarget:self
-                                      action:@selector(selectPlayniteDiagnosticMode)
-                            forControlEvents:UIControlEventTouchUpInside];
-    [self updatePlayniteDiagnosticModeButton];
-    [self.scrollView addSubview:_playniteDiagnosticModeButton];
-#endif
 #endif
 }
-
-#if DEBUG && !TARGET_OS_TV
-- (void)updatePlayniteDiagnosticModeButton {
-    NSInteger mode = [[NSUserDefaults standardUserDefaults] integerForKey:PLAYNITE_STARTUP_DIAGNOSTIC_MODE_KEY];
-    NSString *title = @"Startup test: Normal";
-    if (mode == PLAYNITE_DIAGNOSTIC_NO_STREAM_AUDIO) {
-        title = @"Startup test: No stream audio";
-    }
-    else if (mode == PLAYNITE_DIAGNOSTIC_NO_VIDEO_ENQUEUE) {
-        title = @"Startup test: No video enqueue";
-    }
-    else if (mode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_CATEGORY) {
-        title = @"Startup test: Prepare audio category";
-    }
-    else if (mode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_ACTIVE) {
-        title = @"Startup test: Prepare audio active";
-    }
-    [_playniteDiagnosticModeButton setTitle:title forState:UIControlStateNormal];
-}
-
-- (void)selectPlayniteDiagnosticMode {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Startup diagnostic mode"
-                                                                   message:@"Temporary test for the next stream. Restore Normal afterwards."
-                                                            preferredStyle:UIAlertControllerStyleActionSheet];
-    NSArray<NSString *> *titles = @[@"Normal", @"No stream audio", @"No video enqueue",
-                                    @"Prepare audio category", @"Prepare audio active"];
-    for (NSInteger mode = 0; mode < titles.count; mode++) {
-        NSInteger selectedMode = mode;
-        [alert addAction:[UIAlertAction actionWithTitle:titles[mode]
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(UIAlertAction *action) {
-            (void)action;
-            [[NSUserDefaults standardUserDefaults] setInteger:selectedMode
-                                                       forKey:PLAYNITE_STARTUP_DIAGNOSTIC_MODE_KEY];
-            [self updatePlayniteDiagnosticModeButton];
-        }]];
-    }
-    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
-                                          style:UIAlertActionStyleCancel handler:nil]];
-    UIPopoverPresentationController *popover = alert.popoverPresentationController;
-    popover.sourceView = _playniteDiagnosticModeButton;
-    popover.sourceRect = _playniteDiagnosticModeButton.bounds;
-    [self presentViewController:alert animated:YES completion:nil];
-}
-#endif
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
     [textField resignFirstResponder];
