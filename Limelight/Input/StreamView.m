@@ -17,6 +17,9 @@
 #import <QuartzCore/QuartzCore.h>
 
 #if !TARGET_OS_TV
+#import <AVFoundation/AVFoundation.h>
+#import <VideoToolbox/VideoToolbox.h>
+#import <objc/message.h>
 #import "SpecialKeysPanel.h"
 #import "SpecialKeysState.h"
 
@@ -457,6 +460,63 @@ static void SendSpecialKeysSequenceEvent(const SpecialKeysSequenceEvent *event, 
     const NSUInteger requiredLength = ReadinessFrameWidth * ReadinessFrameHeight * ReadinessFrameBytesPerPixel;
     if (![NSThread isMainThread] || rgbaPixels == NULL || byteLength < requiredLength ||
         self.bounds.size.width <= 0 || self.bounds.size.height <= 0) {
+        return NO;
+    }
+
+    if (@available(iOS 17.4, *)) {
+        // AVSampleBufferDisplayLayer is composited separately from UIKit. A
+        // drawViewHierarchyInRect: snapshot can report success while returning
+        // black instead of the streamed video. Use the layer's decoded frame,
+        // just as Android's PixelCopy reads the stream surface itself.
+        for (CALayer *layer in self.layer.sublayers) {
+            if (![layer isKindOfClass:AVSampleBufferDisplayLayer.class]) {
+                continue;
+            }
+            AVSampleBufferDisplayLayer *videoLayer = (AVSampleBufferDisplayLayer *)layer;
+            CVPixelBufferRef frame = [videoLayer.sampleBufferRenderer copyDisplayedPixelBuffer];
+            if (frame == NULL) {
+                // The public renderer readback can return NULL during playback.
+                // WebKit uses the display layer's readback selector for live
+                // AVSampleBufferDisplayLayer content on iOS; this is a guarded
+                // compatibility path for this personal sideload build.
+                SEL readbackSelector = NSSelectorFromString(@"copyDisplayedPixelBuffer");
+                if ([videoLayer respondsToSelector:readbackSelector]) {
+                    CVPixelBufferRef (*copyFrame)(id, SEL) = (void *)objc_msgSend;
+                    frame = copyFrame(videoLayer, readbackSelector);
+                }
+            }
+            if (frame == NULL) {
+                return NO;
+            }
+            CGImageRef image = NULL;
+            OSStatus status = VTCreateCGImageFromCVPixelBuffer(frame, NULL, &image);
+            CVPixelBufferRelease(frame);
+            if (status != noErr || image == NULL) {
+                if (image != NULL) {
+                    CGImageRelease(image);
+                }
+                return NO;
+            }
+
+            CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+            CGContextRef context = CGBitmapContextCreate(rgbaPixels,
+                                                         ReadinessFrameWidth,
+                                                         ReadinessFrameHeight,
+                                                         8,
+                                                         ReadinessFrameWidth * ReadinessFrameBytesPerPixel,
+                                                         colorSpace,
+                                                         kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+            CGColorSpaceRelease(colorSpace);
+            if (context == NULL) {
+                CGImageRelease(image);
+                return NO;
+            }
+            CGContextSetInterpolationQuality(context, kCGInterpolationNone);
+            CGContextDrawImage(context, CGRectMake(0, 0, ReadinessFrameWidth, ReadinessFrameHeight), image);
+            CGContextRelease(context);
+            CGImageRelease(image);
+            return YES;
+        }
         return NO;
     }
 
