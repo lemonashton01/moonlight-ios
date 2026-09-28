@@ -162,6 +162,95 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
     return [NSData dataWithBytes:digest length:sizeof(digest)];
 }
 
+- (PlayniteBridgeConnectionTestResult)connectionTestResultForData:(NSData *)data
+                                                          response:(NSURLResponse *)response
+                                                             error:(NSError *)error {
+    if (error != nil) {
+        return PlayniteBridgeConnectionTestUnreachable;
+    }
+    if (![response isKindOfClass:NSHTTPURLResponse.class]) {
+        return PlayniteBridgeConnectionTestInvalidResponse;
+    }
+    NSInteger statusCode = ((NSHTTPURLResponse *)response).statusCode;
+    if (statusCode == 403) {
+        return PlayniteBridgeConnectionTestAuthenticationFailed;
+    }
+    if (statusCode != 200 || data.length == 0 || data.length > PlayniteMaximumResponseBytes) {
+        return PlayniteBridgeConnectionTestInvalidResponse;
+    }
+
+    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![json isKindOfClass:NSDictionary.class]) {
+        return PlayniteBridgeConnectionTestInvalidResponse;
+    }
+    NSString *responseSession = json[@"session"];
+    NSString *state = json[@"state"];
+    NSString *frameBase64 = json[@"framePngBase64"];
+    NSString *signatureHex = json[@"hmacSha256"];
+    if (![responseSession isKindOfClass:NSString.class] ||
+        ![state isKindOfClass:NSString.class] ||
+        ![frameBase64 isKindOfClass:NSString.class] ||
+        ![signatureHex isKindOfClass:NSString.class] ||
+        ![_sessionId isEqualToString:responseSession] ||
+        !([state isEqualToString:@"waiting"] || [state isEqualToString:@"ready"])) {
+        return PlayniteBridgeConnectionTestInvalidResponse;
+    }
+    NSString *responseText = [NSString stringWithFormat:@"%@\n%@\n%@", responseSession, state, frameBase64];
+    NSData *expectedSignature = [self signatureForUTF8String:responseText];
+    NSData *receivedSignature = PlayniteDataFromHex(signatureHex);
+    if (expectedSignature == nil || receivedSignature == nil ||
+        !PlayniteConstantTimeEqual(expectedSignature, receivedSignature)) {
+        return PlayniteBridgeConnectionTestInvalidResponse;
+    }
+    return PlayniteBridgeConnectionTestSuccess;
+}
+
++ (void)testHostAddress:(NSString *)hostAddress
+              sharedKey:(NSString *)sharedKey
+             completion:(void (^)(PlayniteBridgeConnectionTestResult result))completion {
+    if (sharedKey.length < 16) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(PlayniteBridgeConnectionTestMissingKey); });
+        return;
+    }
+
+    PlayniteReadinessMonitor *probe = [[PlayniteReadinessMonitor alloc]
+        initWithHostAddress:hostAddress sharedKey:sharedKey streamView:nil readinessConfirmed:nil];
+    NSURL *url = [probe readinessURL];
+    NSString *requestText = [NSString stringWithFormat:@"GET\n/moonlight/ready\n%@", probe->_sessionId];
+    NSData *requestSignature = [probe signatureForUTF8String:requestText];
+    if (requestSignature.length != CC_SHA256_DIGEST_LENGTH) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(PlayniteBridgeConnectionTestInvalidResponse); });
+        return;
+    }
+    NSString *signatureHex = PlayniteHexString(requestSignature.bytes, requestSignature.length);
+    if (url == nil || signatureHex == nil) {
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(PlayniteBridgeConnectionTestInvalidResponse); });
+        return;
+    }
+
+    NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    configuration.URLCache = nil;
+    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    configuration.timeoutIntervalForRequest = PlayniteRequestTimeout;
+    configuration.timeoutIntervalForResource = PlayniteRequestTimeout;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:probe delegateQueue:nil];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:PlayniteRequestTimeout];
+    request.HTTPMethod = @"GET";
+    request.HTTPShouldHandleCookies = NO;
+    [request setValue:signatureHex forHTTPHeaderField:@"X-Moonlight-Auth"];
+    NSURLSessionDataTask *task = [session dataTaskWithRequest:request
+                                            completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        PlayniteBridgeConnectionTestResult result = [probe connectionTestResultForData:data
+                                                                               response:response
+                                                                                  error:error];
+        [session finishTasksAndInvalidate];
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(result); });
+    }];
+    [task resume];
+}
+
 - (void)start {
     if (self.isStopped) {
         return;

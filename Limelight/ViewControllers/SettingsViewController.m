@@ -10,28 +10,43 @@
 #import "TemporarySettings.h"
 #import "DataManager.h"
 #import "PlayniteStartupPreferences.h"
+#if !TARGET_OS_TV
+#import "PlayniteReadinessMonitor.h"
+#import "SWRevealViewController.h"
+#endif
 
 #import <VideoToolbox/VideoToolbox.h>
 #import <AVFoundation/AVFoundation.h>
 
-@interface SettingsViewController () <UITextFieldDelegate>
+@interface SettingsViewController ()
 @end
 
 @implementation SettingsViewController {
     NSInteger _bitrate;
     NSInteger _lastSelectedResolutionIndex;
 #if !TARGET_OS_TV
+    UIStackView *_playniteSectionStack;
     UILabel *_playniteStartupLabel;
     UILabel *_playniteStartupDescription;
     UISwitch *_playniteStartupSwitch;
-    UITextField *_playniteReadinessKeyField;
+    UILabel *_playniteReadinessKeyStatus;
     UILabel *_playniteReadinessDescription;
+    UIButton *_playnitePasteKeyButton;
+    UIButton *_playniteClearKeyButton;
+    UIButton *_playniteTestButton;
+    UILabel *_playniteTestStatus;
+    BOOL _playniteTestInProgress;
 #endif
 }
 
 @dynamic overrideUserInterfaceStyle;
 
 static NSString* bitrateFormat = @"Bitrate: %.1f Mbps";
+#if !TARGET_OS_TV
+static NSString *PlayniteSettingsText(NSString *english, NSString *japanese) {
+    return [[NSLocale preferredLanguages].firstObject hasPrefix:@"ja"] ? japanese : english;
+}
+#endif
 static const int bitrateTable[] = {
     500,
     1000,
@@ -88,9 +103,7 @@ CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
     // size.
     for (UIView* view in self.scrollView.subviews) {
 #if !TARGET_OS_TV
-        if (view == _playniteStartupLabel || view == _playniteStartupDescription ||
-            view == _playniteStartupSwitch || view == _playniteReadinessKeyField ||
-            view == _playniteReadinessDescription) {
+        if (view == _playniteSectionStack) {
             continue;
         }
 #endif
@@ -110,28 +123,29 @@ CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
     }
 
 #if !TARGET_OS_TV
-    if (_playniteStartupLabel != nil) {
-        // Leave additional trailing room for the iPhone safe-area adjustment
-        // applied to the settings scroll view in viewSafeAreaInsetsDidChange.
-        CGFloat contentWidth = MAX(200, self.scrollView.bounds.size.width - 56);
-        CGFloat left = 16;
-        CGFloat top = highestViewY + 24;
-        CGSize startupDescriptionSize = [_playniteStartupDescription sizeThatFits:
-            CGSizeMake(contentWidth, CGFLOAT_MAX)];
-        CGSize readinessDescriptionSize = [_playniteReadinessDescription sizeThatFits:
-            CGSizeMake(contentWidth, CGFLOAT_MAX)];
-        CGFloat startupDescriptionHeight = MAX(38, startupDescriptionSize.height);
-        CGFloat readinessDescriptionHeight = MAX(36, readinessDescriptionSize.height);
-        _playniteStartupLabel.frame = CGRectMake(left, top, contentWidth - 70, 31);
-        _playniteStartupSwitch.frame = CGRectMake(left + contentWidth - 58, top, 52, 31);
-        _playniteStartupDescription.frame = CGRectMake(left, top + 34, contentWidth, startupDescriptionHeight);
-        CGFloat keyFieldTop = CGRectGetMaxY(_playniteStartupDescription.frame) + 8;
-        _playniteReadinessKeyField.frame = CGRectMake(left, keyFieldTop, contentWidth, 36);
-        _playniteReadinessDescription.frame = CGRectMake(left,
-                                                         CGRectGetMaxY(_playniteReadinessKeyField.frame) + 4,
-                                                         contentWidth,
-                                                         readinessDescriptionHeight);
-        highestViewY = CGRectGetMaxY(_playniteReadinessDescription.frame);
+    if (_playniteSectionStack != nil) {
+        // SWReveal's rear view includes overdraw behind the front view. Lay out
+        // this section within the visible reveal width, not the wider scroll view.
+        CGFloat visibleWidth = self.scrollView.bounds.size.width;
+        SWRevealViewController *revealController = [self revealViewController];
+        if (revealController != nil) {
+            CGFloat revealWidth = revealController.rearViewRevealWidth;
+            if (revealWidth < 0) {
+                revealWidth += revealController.view.bounds.size.width;
+            }
+            if (revealWidth > 0) {
+                visibleWidth = MIN(visibleWidth, revealWidth);
+            }
+        }
+        CGFloat left = 16 + MIN(self.view.safeAreaInsets.left, 20);
+        CGFloat right = 16 + MIN(self.view.safeAreaInsets.right, 20);
+        CGFloat width = MAX(1, visibleWidth - left - right);
+        CGSize fittedSize = [_playniteSectionStack systemLayoutSizeFittingSize:
+            CGSizeMake(width, UILayoutFittingCompressedSize.height)
+            withHorizontalFittingPriority:UILayoutPriorityRequired
+                  verticalFittingPriority:UILayoutPriorityFittingSizeLevel];
+        _playniteSectionStack.frame = CGRectMake(left, highestViewY + 24, width, ceil(fittedSize.height));
+        highestViewY = CGRectGetMaxY(_playniteSectionStack.frame);
     }
 #endif
     
@@ -146,6 +160,11 @@ CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
     
     if (@available(iOS 11.0, *)) {
         for (UIView* view in self.view.subviews) {
+#if !TARGET_OS_TV
+            if (view == _playniteSectionStack) {
+                continue;
+            }
+#endif
             // HACK: The official safe area is much too large for our purposes
             // so we'll just use the presence of any safe area to indicate we should
             // pad by 20.
@@ -310,68 +329,264 @@ BOOL isCustomResolution(CGSize res) {
 
 #if !TARGET_OS_TV
     NSUserDefaults *startupPreferences = [NSUserDefaults standardUserDefaults];
+    _playniteSectionStack = [[UIStackView alloc] initWithFrame:CGRectZero];
+    _playniteSectionStack.axis = UILayoutConstraintAxisVertical;
+    _playniteSectionStack.alignment = UIStackViewAlignmentFill;
+    _playniteSectionStack.spacing = 10;
+    [self.scrollView addSubview:_playniteSectionStack];
+
     _playniteStartupLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-    _playniteStartupLabel.text = @"Playnite startup animation";
-    _playniteStartupLabel.font = [UIFont boldSystemFontOfSize:17];
+    _playniteStartupLabel.text = PlayniteSettingsText(@"Playnite Startup", @"Playnite起動演出");
+    _playniteStartupLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+    _playniteStartupLabel.adjustsFontForContentSizeCategory = YES;
     _playniteStartupLabel.textColor = [UIColor whiteColor];
-    _playniteStartupLabel.adjustsFontSizeToFitWidth = YES;
-    _playniteStartupLabel.minimumScaleFactor = 0.8;
-    [self.scrollView addSubview:_playniteStartupLabel];
+    _playniteStartupLabel.numberOfLines = 2;
+    [_playniteStartupLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
+                                                           forAxis:UILayoutConstraintAxisHorizontal];
 
     _playniteStartupSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
     _playniteStartupSwitch.on = [startupPreferences boolForKey:PLAYNITE_STARTUP_ANIMATION_ENABLED_KEY];
-    [self.scrollView addSubview:_playniteStartupSwitch];
+    [_playniteStartupSwitch setContentCompressionResistancePriority:UILayoutPriorityRequired
+                                                            forAxis:UILayoutConstraintAxisHorizontal];
+    UIStackView *startupRow = [[UIStackView alloc] initWithArrangedSubviews:
+                               @[_playniteStartupLabel, _playniteStartupSwitch]];
+    startupRow.axis = UILayoutConstraintAxisHorizontal;
+    startupRow.alignment = UIStackViewAlignmentCenter;
+    startupRow.spacing = 12;
+    [_playniteSectionStack addArrangedSubview:startupRow];
 
     _playniteStartupDescription = [[UILabel alloc] initWithFrame:CGRectZero];
-    _playniteStartupDescription.text = @"Play the Horizon Scan cover only for a fresh Playnite launch. Resumed sessions keep normal Moonlight behavior.";
-    _playniteStartupDescription.font = [UIFont systemFontOfSize:13];
+    _playniteStartupDescription.text = PlayniteSettingsText(
+        @"Play Horizon Scan on a fresh Playnite launch. Resumed sessions are unchanged.",
+        @"Playniteの新規起動時のみ再生します。セッション復帰時は表示しません。");
+    _playniteStartupDescription.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    _playniteStartupDescription.adjustsFontForContentSizeCategory = YES;
     _playniteStartupDescription.textColor = [UIColor lightGrayColor];
     _playniteStartupDescription.numberOfLines = 0;
-    [self.scrollView addSubview:_playniteStartupDescription];
+    [_playniteSectionStack addArrangedSubview:_playniteStartupDescription];
 
-    _playniteReadinessKeyField = [[UITextField alloc] initWithFrame:CGRectZero];
-    _playniteReadinessKeyField.borderStyle = UITextBorderStyleRoundedRect;
-    _playniteReadinessKeyField.backgroundColor = [UIColor colorWithWhite:0.18 alpha:1];
-    _playniteReadinessKeyField.textColor = [UIColor whiteColor];
-    _playniteReadinessKeyField.tintColor = self.view.tintColor;
-    _playniteReadinessKeyField.font = [UIFont systemFontOfSize:15];
-    _playniteReadinessKeyField.placeholder = @"Playnite Ready Bridge key (16+ characters)";
-    _playniteReadinessKeyField.secureTextEntry = YES;
-    _playniteReadinessKeyField.autocorrectionType = UITextAutocorrectionTypeNo;
-    _playniteReadinessKeyField.autocapitalizationType = UITextAutocapitalizationTypeNone;
-    _playniteReadinessKeyField.spellCheckingType = UITextSpellCheckingTypeNo;
-    _playniteReadinessKeyField.returnKeyType = UIReturnKeyDone;
-    _playniteReadinessKeyField.delegate = self;
-    _playniteReadinessKeyField.text = [startupPreferences stringForKey:PLAYNITE_READINESS_SHARED_KEY] ?: @"";
-    [self.scrollView addSubview:_playniteReadinessKeyField];
+    _playniteReadinessKeyStatus = [[UILabel alloc] initWithFrame:CGRectZero];
+    _playniteReadinessKeyStatus.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    _playniteReadinessKeyStatus.adjustsFontForContentSizeCategory = YES;
+    _playniteReadinessKeyStatus.textColor = [UIColor whiteColor];
+    _playniteReadinessKeyStatus.numberOfLines = 0;
+    [_playniteSectionStack addArrangedSubview:_playniteReadinessKeyStatus];
+    [self updatePlayniteKeyStatus];
 
     _playniteReadinessDescription = [[UILabel alloc] initWithFrame:CGRectZero];
-    _playniteReadinessDescription.text = @"Use the same shared key as Playnite Ready Bridge on your PC. The key is never written to logs.";
-    _playniteReadinessDescription.font = [UIFont systemFontOfSize:13];
+    _playniteReadinessDescription.text = PlayniteSettingsText(
+        @"Paste the same shared key used by Playnite Ready Bridge on your PC. The key is never shown here or written to logs.",
+        @"PCのPlaynite Ready Bridgeと同じ共有キーを貼り付けてください。キー本体は表示・記録しません。");
+    _playniteReadinessDescription.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    _playniteReadinessDescription.adjustsFontForContentSizeCategory = YES;
     _playniteReadinessDescription.textColor = [UIColor lightGrayColor];
     _playniteReadinessDescription.numberOfLines = 0;
-    [self.scrollView addSubview:_playniteReadinessDescription];
+    [_playniteSectionStack addArrangedSubview:_playniteReadinessDescription];
+
+    _playnitePasteKeyButton = [self playniteButtonWithTitle:
+        PlayniteSettingsText(@"Paste Key", @"キーを貼り付け") action:@selector(pastePlayniteKey)];
+    _playniteClearKeyButton = [self playniteButtonWithTitle:
+        PlayniteSettingsText(@"Clear Key", @"キーを消去") action:@selector(confirmClearPlayniteKey)];
+    UIStackView *keyButtonRow = [[UIStackView alloc] initWithArrangedSubviews:
+                                 @[_playnitePasteKeyButton, _playniteClearKeyButton]];
+    keyButtonRow.axis = UILayoutConstraintAxisHorizontal;
+    keyButtonRow.distribution = UIStackViewDistributionFillEqually;
+    keyButtonRow.spacing = 8;
+    [_playniteSectionStack addArrangedSubview:keyButtonRow];
+
+    _playniteTestButton = [self playniteButtonWithTitle:
+        PlayniteSettingsText(@"Test Ready Bridge Connection", @"Ready Bridge 接続テスト")
+                                                 action:@selector(testPlayniteBridge)];
+    [_playniteSectionStack addArrangedSubview:_playniteTestButton];
+
+    _playniteTestStatus = [[UILabel alloc] initWithFrame:CGRectZero];
+    _playniteTestStatus.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    _playniteTestStatus.adjustsFontForContentSizeCategory = YES;
+    _playniteTestStatus.textColor = [UIColor lightGrayColor];
+    _playniteTestStatus.numberOfLines = 0;
+    _playniteTestStatus.text = PlayniteSettingsText(@"Not tested", @"接続テスト未実行");
+    [_playniteSectionStack addArrangedSubview:_playniteTestStatus];
 #endif
 }
 
-- (BOOL)textFieldShouldReturn:(UITextField *)textField {
-    [textField resignFirstResponder];
-    return YES;
+#if !TARGET_OS_TV
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self updatePlayniteKeyStatus];
 }
 
-- (void)textFieldDidEndEditing:(UITextField *)textField {
-    if (textField != _playniteReadinessKeyField) {
+- (UIButton *)playniteButtonWithTitle:(NSString *)title action:(SEL)action {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    [button setTitle:title forState:UIControlStateNormal];
+    button.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    button.titleLabel.adjustsFontForContentSizeCategory = YES;
+    button.titleLabel.numberOfLines = 2;
+    button.titleLabel.textAlignment = NSTextAlignmentCenter;
+    button.backgroundColor = [UIColor colorWithWhite:0.22 alpha:1];
+    button.tintColor = [UIColor whiteColor];
+    button.layer.cornerRadius = 8;
+    [button.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+    [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return button;
+}
+
+- (void)updatePlayniteKeyStatus {
+    NSString *key = [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY];
+    if (key.length >= 16) {
+        NSString *lengthText = [NSString stringWithFormat:@"%lu", (unsigned long)key.length];
+        _playniteReadinessKeyStatus.text = [NSString stringWithFormat:@"%@%@%@",
+            PlayniteSettingsText(@"Ready Bridge key: Configured (",
+                                 @"Ready Bridge key: 設定済み（"),
+            lengthText,
+            PlayniteSettingsText(@" characters)", @"文字）")];
+    }
+    else {
+        _playniteReadinessKeyStatus.text = PlayniteSettingsText(
+            @"Ready Bridge key: Not configured", @"Ready Bridge key: 未設定");
+    }
+    [self.view setNeedsLayout];
+}
+
+- (void)showPlayniteTestStatus:(NSString *)status success:(BOOL)success {
+    _playniteTestStatus.text = status;
+    _playniteTestStatus.textColor = success ? [UIColor systemGreenColor] : [UIColor lightGrayColor];
+    [self.view setNeedsLayout];
+}
+
+- (void)pastePlayniteKey {
+    NSString *clipboard = [UIPasteboard generalPasteboard].string;
+    NSString *withoutNewlines = [[clipboard ?: @"" componentsSeparatedByCharactersInSet:
+        [NSCharacterSet newlineCharacterSet]] componentsJoinedByString:@""];
+    NSString *key = [withoutNewlines stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (key.length < 16) {
+        [self showPlayniteTestStatus:PlayniteSettingsText(
+            @"Clipboard key is empty or shorter than 16 characters.",
+            @"クリップボードのキーが空か、16文字未満です。") success:NO];
         return;
     }
-
-    NSString *sharedKey = textField.text ?: @"";
-    [[NSUserDefaults standardUserDefaults] setObject:sharedKey forKey:PLAYNITE_READINESS_SHARED_KEY];
-#if DEBUG
-    NSLog(@"[PlayniteDiag] Ready Bridge key saved from settings: present=%@ length=%lu",
-          sharedKey.length >= 16 ? @"yes" : @"no",
-          (unsigned long)sharedKey.length);
-#endif
+    [[NSUserDefaults standardUserDefaults] setObject:key forKey:PLAYNITE_READINESS_SHARED_KEY];
+    [self updatePlayniteKeyStatus];
+    [self showPlayniteTestStatus:PlayniteSettingsText(
+        @"Key saved. Run the connection test to verify it.",
+        @"キーを保存しました。接続テストで確認してください。") success:NO];
 }
+
+- (void)confirmClearPlayniteKey {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:
+        PlayniteSettingsText(@"Clear Ready Bridge key?", @"Ready Bridge keyを消去しますか？")
+        message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:PlayniteSettingsText(@"Cancel", @"キャンセル")
+                                              style:UIAlertActionStyleCancel handler:nil]];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:PlayniteSettingsText(@"Clear Key", @"キーを消去")
+                                              style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:PLAYNITE_READINESS_SHARED_KEY];
+        [weakSelf updatePlayniteKeyStatus];
+        [weakSelf showPlayniteTestStatus:PlayniteSettingsText(@"Key cleared.", @"キーを消去しました。") success:NO];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (NSString *)playniteAddressForHost:(TemporaryHost *)host {
+    if (host.activeAddress.length > 0) return host.activeAddress;
+    if (host.localAddress.length > 0) return host.localAddress;
+    if (host.externalAddress.length > 0) return host.externalAddress;
+    if (host.address.length > 0) return host.address;
+    return host.ipv6Address;
+}
+
+- (void)testPlayniteBridgeForHost:(TemporaryHost *)host sharedKey:(NSString *)sharedKey {
+    NSString *address = [self playniteAddressForHost:host];
+    if (address.length == 0) {
+        [self showPlayniteTestStatus:PlayniteSettingsText(
+            @"This PC has no usable address.", @"このPCの接続先が見つかりません。") success:NO];
+        return;
+    }
+    _playniteTestInProgress = YES;
+    _playniteTestButton.enabled = NO;
+    [self showPlayniteTestStatus:PlayniteSettingsText(@"Connecting…", @"接続中…") success:NO];
+    __weak typeof(self) weakSelf = self;
+    [PlayniteReadinessMonitor testHostAddress:address sharedKey:sharedKey
+                                  completion:^(PlayniteBridgeConnectionTestResult result) {
+        SettingsViewController *strongSelf = weakSelf;
+        if (strongSelf == nil) return;
+        strongSelf->_playniteTestInProgress = NO;
+        strongSelf->_playniteTestButton.enabled = YES;
+        NSString *currentKey = [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY];
+        if (![currentKey isEqualToString:sharedKey]) {
+            [strongSelf showPlayniteTestStatus:PlayniteSettingsText(
+                @"Key changed. Run the connection test again.",
+                @"キーが変更されました。接続テストをやり直してください。") success:NO];
+            return;
+        }
+        switch (result) {
+            case PlayniteBridgeConnectionTestSuccess:
+                [strongSelf showPlayniteTestStatus:PlayniteSettingsText(
+                    @"Ready Bridge: Connection OK / Authentication OK",
+                    @"Ready Bridge: 接続OK / 認証OK") success:YES];
+                break;
+            case PlayniteBridgeConnectionTestMissingKey:
+                [strongSelf showPlayniteTestStatus:PlayniteSettingsText(
+                    @"Shared key is not configured.", @"共有キーが未設定です。") success:NO];
+                break;
+            case PlayniteBridgeConnectionTestUnreachable:
+                [strongSelf showPlayniteTestStatus:PlayniteSettingsText(
+                    @"Cannot connect to PC (TCP 48591).", @"PCへ接続できません（TCP 48591）。") success:NO];
+                break;
+            case PlayniteBridgeConnectionTestAuthenticationFailed:
+                [strongSelf showPlayniteTestStatus:PlayniteSettingsText(
+                    @"Shared key does not match.", @"共有キーが一致しません。") success:NO];
+                break;
+            case PlayniteBridgeConnectionTestInvalidResponse:
+                [strongSelf showPlayniteTestStatus:PlayniteSettingsText(
+                    @"Invalid response from Ready Bridge.",
+                    @"Ready Bridgeから無効な応答を受信しました。") success:NO];
+                break;
+        }
+    }];
+}
+
+- (void)testPlayniteBridge {
+    if (_playniteTestInProgress) return;
+    NSString *key = [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY];
+    if (key.length < 16) {
+        [self showPlayniteTestStatus:PlayniteSettingsText(
+            @"Shared key is not configured.", @"共有キーが未設定です。") success:NO];
+        return;
+    }
+    NSArray *hosts = [[[DataManager alloc] init] getHosts];
+    NSMutableArray<TemporaryHost *> *usableHosts = [NSMutableArray array];
+    for (TemporaryHost *host in hosts) {
+        if ([self playniteAddressForHost:host].length > 0) [usableHosts addObject:host];
+    }
+    if (usableHosts.count == 0) {
+        [self showPlayniteTestStatus:PlayniteSettingsText(
+            @"No saved PC found. Add your PC first.",
+            @"保存済みのPCがありません。先にPCを追加してください。") success:NO];
+    }
+    else if (usableHosts.count == 1) {
+        [self testPlayniteBridgeForHost:usableHosts.firstObject sharedKey:key];
+    }
+    else {
+        UIAlertController *picker = [UIAlertController alertControllerWithTitle:
+            PlayniteSettingsText(@"Select PC to test", @"接続テストするPCを選択")
+            message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+        __weak typeof(self) weakSelf = self;
+        for (TemporaryHost *host in usableHosts) {
+            [picker addAction:[UIAlertAction actionWithTitle:host.name ?: [self playniteAddressForHost:host]
+                                                  style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                [weakSelf testPlayniteBridgeForHost:host sharedKey:key];
+            }]];
+        }
+        [picker addAction:[UIAlertAction actionWithTitle:PlayniteSettingsText(@"Cancel", @"キャンセル")
+                                                 style:UIAlertActionStyleCancel handler:nil]];
+        picker.popoverPresentationController.sourceView = _playniteTestButton;
+        picker.popoverPresentationController.sourceRect = _playniteTestButton.bounds;
+        [self presentViewController:picker animated:YES completion:nil];
+    }
+}
+#endif
 
 - (void) touchModeChanged {
     // Disable on-screen controls in absolute touch mode
@@ -665,8 +880,6 @@ BOOL isCustomResolution(CGSize res) {
 #if !TARGET_OS_TV
     NSUserDefaults *startupPreferences = [NSUserDefaults standardUserDefaults];
     [startupPreferences setBool:_playniteStartupSwitch.on forKey:PLAYNITE_STARTUP_ANIMATION_ENABLED_KEY];
-    [startupPreferences setObject:_playniteReadinessKeyField.text ?: @""
-                            forKey:PLAYNITE_READINESS_SHARED_KEY];
 #endif
 }
 
