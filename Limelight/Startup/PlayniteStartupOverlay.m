@@ -751,6 +751,25 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
     }
 }
 
+- (void)resumePlaybackAfterStreamConnectionStarted {
+    // SDL opens and activates its audio device during connection startup.
+    // On iOS this can leave the already-playing startup AVPlayer paused, even
+    // though its item is fully buffered and the app remains active. Retry only
+    // once, after Moonlight has completed its normal audio setup.
+    if (_disposed || _videoFinished || !_playbackStarted || _player == nil ||
+        [UIApplication sharedApplication].applicationState != UIApplicationStateActive ||
+        _player.currentItem.status != AVPlayerItemStatusReadyToPlay ||
+        _player.timeControlStatus != AVPlayerTimeControlStatusPaused || _player.rate != 0) {
+        return;
+    }
+#if DEBUG
+    [self logPlaybackDiagnostics:@"resuming after Moonlight connection started"];
+    NSLog(@"[PlayniteDiag] AVPlayer play retry after Moonlight audio initialization uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
+    [_player play];
+}
+
 - (void)resumePlaybackAfterAppActivation {
 #if DEBUG
     [self logPlaybackDiagnostics:@"app did become active"];

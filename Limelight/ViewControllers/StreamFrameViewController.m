@@ -409,6 +409,7 @@
 #endif
     Log(LOG_I, @"Connection started");
     dispatch_async(dispatch_get_main_queue(), ^{
+        [self->_playniteStartupOverlay resumePlaybackAfterStreamConnectionStarted];
         // Leave the spinner spinning until it's obscured by
         // the first frame of video.
         self->_stageLabel.hidden = YES;

@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)startPlayback;
 - (void)markStreamReady;
 - (void)markReadinessConfirmed;
+- (void)resumePlaybackAfterStreamConnectionStarted;
 - (void)pausePlaybackForAppDeactivation;
 - (void)resumePlaybackAfterAppActivation;
 - (void)dispose;
