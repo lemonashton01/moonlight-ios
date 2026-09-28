@@ -80,9 +80,19 @@
     _config.appVersion = appversion;
     _config.gfeVersion = gfeVersion;
     
+    // Resolve the actual server-side path before showing a Playnite startup
+    // cover. The UI's Launch/Resume choice alone can be stale if the host state
+    // changed while the app list was open.
+    BOOL isResume = [serverState hasSuffix:@"_SERVER_BUSY"];
+    if ([_callbacks respondsToSelector:@selector(streamModeResolvedForResume:)]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_callbacks streamModeResolvedForResume:isResume];
+        });
+    }
+
     // resumeApp and launchApp handle calling launchFailed
     NSString* sessionUrl;
-    if ([serverState hasSuffix:@"_SERVER_BUSY"]) {
+    if (isResume) {
         // App already running, resume it
         if (![self resumeApp:hMan receiveSessionUrl:&sessionUrl]) {
             return;

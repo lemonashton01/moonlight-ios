@@ -33,5 +33,6 @@ typedef NS_ENUM(NSInteger, OnScreenControlsLevel) {
 - (OnScreenControlsLevel) getLevel;
 - (void) show;
 - (void) releaseAllInputs;
+- (void) setControlsTemporarilyHiddenForFrameCapture:(BOOL)hidden;
 
 @end

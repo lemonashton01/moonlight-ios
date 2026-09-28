@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A8D4B0100000000000000011 /* PlayniteStartupOverlay.m in Sources */ = {isa = PBXBuildFile; fileRef = A8D4B0100000000000000022 /* PlayniteStartupOverlay.m */; };
+		A8D4B0100000000000000012 /* PlayniteReadinessMonitor.m in Sources */ = {isa = PBXBuildFile; fileRef = A8D4B0100000000000000024 /* PlayniteReadinessMonitor.m */; };
+		A8D4B0100000000000000013 /* ReadinessFrameMatcher.c in Sources */ = {isa = PBXBuildFile; fileRef = A8D4B0100000000000000026 /* ReadinessFrameMatcher.c */; };
+		A8D4B0100000000000000014 /* moonlight_startup.mp4 in Resources */ = {isa = PBXBuildFile; fileRef = A8D4B0100000000000000027 /* moonlight_startup.mp4 */; };
 		A17B10012D00100100A17B10 /* SpecialKeysPanel.m in Sources */ = {isa = PBXBuildFile; fileRef = A17B10042D00100100A17B10 /* SpecialKeysPanel.m */; };
 		A17B10022D00100100A17B10 /* SpecialKeysState.c in Sources */ = {isa = PBXBuildFile; fileRef = A17B10062D00100100A17B10 /* SpecialKeysState.c */; };
 		693B3A9B218638CD00982F7B /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = 693B3A9A218638CD00982F7B /* Settings.bundle */; };
@@ -172,6 +176,14 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A8D4B0100000000000000021 /* PlayniteStartupOverlay.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PlayniteStartupOverlay.h; sourceTree = "<group>"; };
+		A8D4B0100000000000000022 /* PlayniteStartupOverlay.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PlayniteStartupOverlay.m; sourceTree = "<group>"; };
+		A8D4B0100000000000000023 /* PlayniteReadinessMonitor.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PlayniteReadinessMonitor.h; sourceTree = "<group>"; };
+		A8D4B0100000000000000024 /* PlayniteReadinessMonitor.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = PlayniteReadinessMonitor.m; sourceTree = "<group>"; };
+		A8D4B0100000000000000025 /* ReadinessFrameMatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ReadinessFrameMatcher.h; sourceTree = "<group>"; };
+		A8D4B0100000000000000026 /* ReadinessFrameMatcher.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ReadinessFrameMatcher.c; sourceTree = "<group>"; };
+		A8D4B0100000000000000027 /* moonlight_startup.mp4 */ = {isa = PBXFileReference; lastKnownFileType = file; path = moonlight_startup.mp4; sourceTree = "<group>"; };
+		A8D4B0100000000000000028 /* PlayniteStartupPreferences.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PlayniteStartupPreferences.h; sourceTree = "<group>"; };
 		A17B10032D00100100A17B10 /* SpecialKeysPanel.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SpecialKeysPanel.h; sourceTree = "<group>"; };
 		A17B10042D00100100A17B10 /* SpecialKeysPanel.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SpecialKeysPanel.m; sourceTree = "<group>"; };
 		A17B10052D00100100A17B10 /* SpecialKeysState.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SpecialKeysState.h; sourceTree = "<group>"; };
@@ -457,6 +469,7 @@
 				FB89460E19F646E200339C8A /* Network */,
 				FB89461519F646E200339C8A /* Stream */,
 				FB89461E19F646E200339C8A /* Utility */,
+				A8D4B0100000000000000031 /* Startup */,
 				FB89462319F646E200339C8A /* ViewControllers */,
 				FBD3495F1A004453002D2A60 /* Database */,
 				FB290CFA19B2C406004C83CF /* Supporting Files */,
@@ -568,12 +581,27 @@
 		FB89461E19F646E200339C8A /* Utility */ = {
 			isa = PBXGroup;
 			children = (
+				A8D4B0100000000000000028 /* PlayniteStartupPreferences.h */,
 				FB89462119F646E200339C8A /* Utils.h */,
 				FB89462219F646E200339C8A /* Utils.m */,
 				FBD1C8E01A8AD69E00C6703C /* Logger.h */,
 				FBD1C8E11A8AD71400C6703C /* Logger.m */,
 			);
 			path = Utility;
+			sourceTree = "<group>";
+		};
+		A8D4B0100000000000000031 /* Startup */ = {
+			isa = PBXGroup;
+			children = (
+				A8D4B0100000000000000021 /* PlayniteStartupOverlay.h */,
+				A8D4B0100000000000000022 /* PlayniteStartupOverlay.m */,
+				A8D4B0100000000000000023 /* PlayniteReadinessMonitor.h */,
+				A8D4B0100000000000000024 /* PlayniteReadinessMonitor.m */,
+				A8D4B0100000000000000025 /* ReadinessFrameMatcher.h */,
+				A8D4B0100000000000000026 /* ReadinessFrameMatcher.c */,
+				A8D4B0100000000000000027 /* moonlight_startup.mp4 */,
+			);
+			path = Startup;
 			sourceTree = "<group>";
 		};
 		FB89462319F646E200339C8A /* ViewControllers */ = {
@@ -826,6 +854,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A8D4B0100000000000000014 /* moonlight_startup.mp4 in Resources */,
 				FB290E7919B37D81004C83CF /* iPad.storyboard in Resources */,
 				FB290CFE19B2C406004C83CF /* InfoPlist.strings in Resources */,
 				FB290E7B19B38036004C83CF /* iPhone.storyboard in Resources */,
@@ -894,6 +923,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A8D4B0100000000000000011 /* PlayniteStartupOverlay.m in Sources */,
+				A8D4B0100000000000000012 /* PlayniteReadinessMonitor.m in Sources */,
+				A8D4B0100000000000000013 /* ReadinessFrameMatcher.c in Sources */,
 				A17B10012D00100100A17B10 /* SpecialKeysPanel.m in Sources */,
 				A17B10022D00100100A17B10 /* SpecialKeysState.c in Sources */,
 				FB290D0719B2C406004C83CF /* Limelight.xcdatamodeld in Sources */,

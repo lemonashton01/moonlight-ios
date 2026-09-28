@@ -601,12 +601,16 @@ static NSMutableSet* hostList;
     [[self activeViewController] presentViewController:alertController animated:YES completion:nil];
 }
 
-- (void) prepareToStreamApp:(TemporaryApp *)app {
+- (void) prepareToStreamApp:(TemporaryApp *)app resumeSession:(BOOL)resumeSession {
     _streamConfig = [[StreamConfiguration alloc] init];
     _streamConfig.host = app.host.activeAddress;
     _streamConfig.httpsPort = app.host.httpsPort;
     _streamConfig.appID = app.id;
     _streamConfig.appName = app.name;
+    BOOL isPlayniteApp = app.name != nil &&
+                         ([app.name caseInsensitiveCompare:@"Playnite"] == NSOrderedSame ||
+                          [app.name caseInsensitiveCompare:@"Playnite Fullscreen"] == NSOrderedSame);
+    _streamConfig.playniteStartupAnimationCandidate = !resumeSession && isPlayniteApp;
     _streamConfig.serverCert = app.host.serverCert;
     
     DataManager* dataMan = [[DataManager alloc] init];
@@ -741,11 +745,11 @@ static NSMutableSet* hostList;
                                 actionWithTitle:currentApp == nil ? @"Launch App" : ([app.id isEqualToString:currentApp.id] ? @"Resume App" : @"Resume Running App") style:UIAlertActionStyleDefault handler:^(UIAlertAction* action){
         if (currentApp != nil) {
             Log(LOG_I, @"Resuming application: %@", currentApp.name);
-            [self prepareToStreamApp:currentApp];
+            [self prepareToStreamApp:currentApp resumeSession:YES];
         }
         else {
             Log(LOG_I, @"Launching application: %@", app.name);
-            [self prepareToStreamApp:app];
+            [self prepareToStreamApp:app resumeSession:NO];
         }
 
         [self performSegueWithIdentifier:@"createStreamFrame" sender:nil];
@@ -800,7 +804,7 @@ static NSMutableSet* hostList;
                                                     dispatch_async(dispatch_get_main_queue(), ^{
                                                         // If it succeeds and we're to start streaming, segue to the stream
                                                         if (![app.id isEqualToString:currentApp.id]) {
-                                                            [self prepareToStreamApp:app];
+                                                            [self prepareToStreamApp:app resumeSession:NO];
                                                             [self hideLoadingFrame: ^{
                                                                 [self performSegueWithIdentifier:@"createStreamFrame" sender:nil];
                                                             }];
@@ -856,7 +860,7 @@ static NSMutableSet* hostList;
         // If there's a running app, display a menu
         [self appLongClicked:app view:view];
     } else {
-        [self prepareToStreamApp:app];
+        [self prepareToStreamApp:app resumeSession:NO];
         [self performSegueWithIdentifier:@"createStreamFrame" sender:nil];
     }
 }

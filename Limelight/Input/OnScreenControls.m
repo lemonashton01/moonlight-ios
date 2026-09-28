@@ -64,6 +64,7 @@
     UIView* _view;
     OnScreenControlsLevel _level;
     BOOL _visible;
+    NSArray<NSNumber *> *_frameCaptureOriginalHiddenStates;
     
     ControllerSupport *_controllerSupport;
     Controller *_controller;
@@ -209,6 +210,37 @@ static float L3_Y;
     _l3Button.borderWidth = _r3Button.borderWidth = 0;
     _leftStick.position = _leftStickBackground.position;
     _rightStick.position = _rightStickBackground.position;
+}
+
+- (void)setControlsTemporarilyHiddenForFrameCapture:(BOOL)hidden {
+    // This only affects the one rendered snapshot used for PC/stream matching.
+    // It deliberately leaves OSC and physical-controller input state untouched.
+    CALayer *layers[] = { _aButton, _bButton, _xButton, _yButton,
+                          _upButton, _downButton, _leftButton, _rightButton,
+                          _startButton, _selectButton, _l1Button, _r1Button,
+                          _l2Button, _r2Button, _l3Button, _r3Button,
+                          _leftStickBackground, _leftStick, _rightStickBackground, _rightStick };
+    const NSUInteger layerCount = sizeof(layers) / sizeof(layers[0]);
+    if (hidden) {
+        if (_frameCaptureOriginalHiddenStates != nil) {
+            return;
+        }
+        NSMutableArray<NSNumber *> *originalStates = [NSMutableArray arrayWithCapacity:layerCount];
+        for (NSUInteger i = 0; i < layerCount; i++) {
+            [originalStates addObject:@(layers[i].hidden)];
+            layers[i].hidden = YES;
+        }
+        _frameCaptureOriginalHiddenStates = [originalStates copy];
+        return;
+    }
+
+    if (_frameCaptureOriginalHiddenStates == nil) {
+        return;
+    }
+    for (NSUInteger i = 0; i < layerCount; i++) {
+        layers[i].hidden = _frameCaptureOriginalHiddenStates[i].boolValue;
+    }
+    _frameCaptureOriginalHiddenStates = nil;
 }
 
 - (void) updateControls {

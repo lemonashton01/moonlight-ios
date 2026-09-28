@@ -18,6 +18,10 @@
 #if !TARGET_OS_TV
 #import "SpecialKeysPanel.h"
 #import "SpecialKeysState.h"
+
+static const size_t ReadinessFrameWidth = 64;
+static const size_t ReadinessFrameHeight = 36;
+static const size_t ReadinessFrameBytesPerPixel = 4;
 #endif
 
 static const double X1_MOUSE_SPEED_DIVISOR = 2.5;
@@ -425,6 +429,71 @@ static void SendSpecialKeysSequenceEvent(const SpecialKeysSequenceEvent *event, 
         isInputingText = true;
     }
 }
+
+#if !TARGET_OS_TV
+- (BOOL)copyReadinessFrameToRGBA:(uint8_t *)rgbaPixels byteLength:(NSUInteger)byteLength {
+    const NSUInteger requiredLength = ReadinessFrameWidth * ReadinessFrameHeight * ReadinessFrameBytesPerPixel;
+    if (![NSThread isMainThread] || rgbaPixels == NULL || byteLength < requiredLength ||
+        self.bounds.size.width <= 0 || self.bounds.size.height <= 0) {
+        return NO;
+    }
+
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(ReadinessFrameWidth, ReadinessFrameHeight), YES, 1.0);
+    CGContextRef drawContext = UIGraphicsGetCurrentContext();
+    if (drawContext == NULL) {
+        UIGraphicsEndImageContext();
+        return NO;
+    }
+    CGContextSetInterpolationQuality(drawContext, kCGInterpolationNone);
+    CGSize videoSize = [self getVideoAreaSize];
+    if (videoSize.width <= 0 || videoSize.height <= 0) {
+        UIGraphicsEndImageContext();
+        return NO;
+    }
+    CGPoint videoOrigin = CGPointMake(CGRectGetMidX(self.bounds) - videoSize.width / 2,
+                                      CGRectGetMidY(self.bounds) - videoSize.height / 2);
+    CGContextScaleCTM(drawContext,
+                      ReadinessFrameWidth / videoSize.width,
+                      ReadinessFrameHeight / videoSize.height);
+    CGContextTranslateCTM(drawContext, -videoOrigin.x, -videoOrigin.y);
+
+    [onScreenControls setControlsTemporarilyHiddenForFrameCapture:YES];
+    BOOL captured = NO;
+    @try {
+        // UIKit captures the visible StreamView hierarchy, including its live
+        // AVSampleBufferDisplayLayer, without removing or pausing the renderer.
+        captured = [self drawViewHierarchyInRect:self.bounds afterScreenUpdates:NO];
+    }
+    @finally {
+        [onScreenControls setControlsTemporarilyHiddenForFrameCapture:NO];
+    }
+
+    UIImage *snapshot = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    CGImageRef image = snapshot.CGImage;
+    if (!captured || image == NULL || CGImageGetWidth(image) != ReadinessFrameWidth ||
+        CGImageGetHeight(image) != ReadinessFrameHeight) {
+        return NO;
+    }
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef rgbaContext = CGBitmapContextCreate(rgbaPixels,
+                                                     ReadinessFrameWidth,
+                                                     ReadinessFrameHeight,
+                                                     8,
+                                                     ReadinessFrameWidth * ReadinessFrameBytesPerPixel,
+                                                     colorSpace,
+                                                     kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(colorSpace);
+    if (rgbaContext == NULL) {
+        return NO;
+    }
+    CGContextSetInterpolationQuality(rgbaContext, kCGInterpolationNone);
+    CGContextDrawImage(rgbaContext, CGRectMake(0, 0, ReadinessFrameWidth, ReadinessFrameHeight), image);
+    CGContextRelease(rgbaContext);
+    return YES;
+}
+#endif
 
 #if !TARGET_OS_TV
 - (NSTimeInterval)specialKeysCurrentTime {

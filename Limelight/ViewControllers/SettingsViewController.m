@@ -9,13 +9,24 @@
 #import "SettingsViewController.h"
 #import "TemporarySettings.h"
 #import "DataManager.h"
+#import "PlayniteStartupPreferences.h"
 
 #import <VideoToolbox/VideoToolbox.h>
 #import <AVFoundation/AVFoundation.h>
 
+@interface SettingsViewController () <UITextFieldDelegate>
+@end
+
 @implementation SettingsViewController {
     NSInteger _bitrate;
     NSInteger _lastSelectedResolutionIndex;
+#if !TARGET_OS_TV
+    UILabel *_playniteStartupLabel;
+    UILabel *_playniteStartupDescription;
+    UISwitch *_playniteStartupSwitch;
+    UITextField *_playniteReadinessKeyField;
+    UILabel *_playniteReadinessDescription;
+#endif
 }
 
 @dynamic overrideUserInterfaceStyle;
@@ -76,6 +87,13 @@ CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
     // highest view Y value to set our scroll view's content
     // size.
     for (UIView* view in self.scrollView.subviews) {
+#if !TARGET_OS_TV
+        if (view == _playniteStartupLabel || view == _playniteStartupDescription ||
+            view == _playniteStartupSwitch || view == _playniteReadinessKeyField ||
+            view == _playniteReadinessDescription) {
+            continue;
+        }
+#endif
         // UIScrollViews have 2 default child views
         // which represent the horizontal and vertical scrolling
         // indicators. Ignore any views we don't recognize.
@@ -90,6 +108,30 @@ CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
             highestViewY = currentViewY;
         }
     }
+
+#if !TARGET_OS_TV
+    if (_playniteStartupLabel != nil) {
+        CGFloat contentWidth = MAX(200, self.scrollView.bounds.size.width - 32);
+        CGFloat left = 16;
+        CGFloat top = highestViewY + 24;
+        CGSize startupDescriptionSize = [_playniteStartupDescription sizeThatFits:
+            CGSizeMake(contentWidth, CGFLOAT_MAX)];
+        CGSize readinessDescriptionSize = [_playniteReadinessDescription sizeThatFits:
+            CGSizeMake(contentWidth, CGFLOAT_MAX)];
+        CGFloat startupDescriptionHeight = MAX(38, startupDescriptionSize.height);
+        CGFloat readinessDescriptionHeight = MAX(36, readinessDescriptionSize.height);
+        _playniteStartupLabel.frame = CGRectMake(left, top, contentWidth - 70, 31);
+        _playniteStartupSwitch.frame = CGRectMake(left + contentWidth - 58, top, 52, 31);
+        _playniteStartupDescription.frame = CGRectMake(left, top + 34, contentWidth, startupDescriptionHeight);
+        CGFloat keyFieldTop = CGRectGetMaxY(_playniteStartupDescription.frame) + 8;
+        _playniteReadinessKeyField.frame = CGRectMake(left, keyFieldTop, contentWidth, 36);
+        _playniteReadinessDescription.frame = CGRectMake(left,
+                                                         CGRectGetMaxY(_playniteReadinessKeyField.frame) + 4,
+                                                         contentWidth,
+                                                         readinessDescriptionHeight);
+        highestViewY = CGRectGetMaxY(_playniteReadinessDescription.frame);
+    }
+#endif
     
     // Add a bit of padding so the view doesn't end right at the button of the display
     self.scrollView.contentSize = CGSizeMake(self.scrollView.contentSize.width,
@@ -263,6 +305,56 @@ BOOL isCustomResolution(CGSize res) {
     [self.bitrateSlider addTarget:self action:@selector(bitrateSliderMoved) forControlEvents:UIControlEventValueChanged];
     [self updateBitrateText];
     [self updateResolutionDisplayViewText];
+
+#if !TARGET_OS_TV
+    NSUserDefaults *startupPreferences = [NSUserDefaults standardUserDefaults];
+    _playniteStartupLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    _playniteStartupLabel.text = @"Playnite startup animation";
+    _playniteStartupLabel.font = [UIFont boldSystemFontOfSize:17];
+    _playniteStartupLabel.textColor = [UIColor whiteColor];
+    _playniteStartupLabel.adjustsFontSizeToFitWidth = YES;
+    _playniteStartupLabel.minimumScaleFactor = 0.8;
+    [self.scrollView addSubview:_playniteStartupLabel];
+
+    _playniteStartupSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    _playniteStartupSwitch.on = [startupPreferences boolForKey:PLAYNITE_STARTUP_ANIMATION_ENABLED_KEY];
+    [self.scrollView addSubview:_playniteStartupSwitch];
+
+    _playniteStartupDescription = [[UILabel alloc] initWithFrame:CGRectZero];
+    _playniteStartupDescription.text = @"Play the Horizon Scan cover only for a fresh Playnite launch. Resumed sessions keep normal Moonlight behavior.";
+    _playniteStartupDescription.font = [UIFont systemFontOfSize:13];
+    _playniteStartupDescription.textColor = [UIColor lightGrayColor];
+    _playniteStartupDescription.numberOfLines = 0;
+    [self.scrollView addSubview:_playniteStartupDescription];
+
+    _playniteReadinessKeyField = [[UITextField alloc] initWithFrame:CGRectZero];
+    _playniteReadinessKeyField.borderStyle = UITextBorderStyleRoundedRect;
+    _playniteReadinessKeyField.backgroundColor = [UIColor colorWithWhite:0.18 alpha:1];
+    _playniteReadinessKeyField.textColor = [UIColor whiteColor];
+    _playniteReadinessKeyField.tintColor = self.view.tintColor;
+    _playniteReadinessKeyField.font = [UIFont systemFontOfSize:15];
+    _playniteReadinessKeyField.placeholder = @"Playnite Ready Bridge key (16+ characters)";
+    _playniteReadinessKeyField.secureTextEntry = YES;
+    _playniteReadinessKeyField.autocorrectionType = UITextAutocorrectionTypeNo;
+    _playniteReadinessKeyField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    _playniteReadinessKeyField.spellCheckingType = UITextSpellCheckingTypeNo;
+    _playniteReadinessKeyField.returnKeyType = UIReturnKeyDone;
+    _playniteReadinessKeyField.delegate = self;
+    _playniteReadinessKeyField.text = [startupPreferences stringForKey:PLAYNITE_READINESS_SHARED_KEY] ?: @"";
+    [self.scrollView addSubview:_playniteReadinessKeyField];
+
+    _playniteReadinessDescription = [[UILabel alloc] initWithFrame:CGRectZero];
+    _playniteReadinessDescription.text = @"Use the same shared key as Playnite Ready Bridge on your PC. The key is never written to logs.";
+    _playniteReadinessDescription.font = [UIFont systemFontOfSize:13];
+    _playniteReadinessDescription.textColor = [UIColor lightGrayColor];
+    _playniteReadinessDescription.numberOfLines = 0;
+    [self.scrollView addSubview:_playniteReadinessDescription];
+#endif
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
 }
 
 - (void) touchModeChanged {
@@ -554,6 +646,12 @@ BOOL isCustomResolution(CGSize res) {
                       btMouseSupport:btMouseSupport
                    absoluteTouchMode:absoluteTouchMode
                         statsOverlay:statsOverlay];
+#if !TARGET_OS_TV
+    NSUserDefaults *startupPreferences = [NSUserDefaults standardUserDefaults];
+    [startupPreferences setBool:_playniteStartupSwitch.on forKey:PLAYNITE_STARTUP_ANIMATION_ENABLED_KEY];
+    [startupPreferences setObject:_playniteReadinessKeyField.text ?: @""
+                            forKey:PLAYNITE_READINESS_SHARED_KEY];
+#endif
 }
 
 - (void)didReceiveMemoryWarning {

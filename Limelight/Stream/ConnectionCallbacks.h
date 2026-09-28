@@ -22,4 +22,8 @@
 - (void) setControllerLed:(uint16_t)controllerNumber r:(uint8_t)r g:(uint8_t)g b:(uint8_t)b;
 - (void) videoContentShown;
 
+@optional
+// Called after GameStream server state identifies the requested operation.
+- (void) streamModeResolvedForResume:(BOOL)isResume;
+
 @end

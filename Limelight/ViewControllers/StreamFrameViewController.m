@@ -12,6 +12,11 @@
 #import "StreamManager.h"
 #import "ControllerSupport.h"
 #import "DataManager.h"
+#if !TARGET_OS_TV
+#import "PlayniteReadinessMonitor.h"
+#import "PlayniteStartupOverlay.h"
+#import "PlayniteStartupPreferences.h"
+#endif
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -50,6 +55,10 @@
     
 #if !TARGET_OS_TV
     UIScreenEdgePanGestureRecognizer *_exitSwipeRecognizer;
+    PlayniteStartupOverlay *_playniteStartupOverlay;
+    PlayniteReadinessMonitor *_playniteReadinessMonitor;
+    BOOL _playniteStartupModeResolved;
+    BOOL _playniteStreamReady;
 #endif
 }
 
@@ -218,6 +227,9 @@
 - (void)willMoveToParentViewController:(UIViewController *)parent {
     // Only cleanup when we're being destroyed
     if (parent == nil) {
+#if !TARGET_OS_TV
+        [self clearPlayniteStartupAnimation];
+#endif
         [_streamView endStreamingSession];
         [_controllerSupport cleanup];
         [UIApplication sharedApplication].idleTimerDisabled = NO;
@@ -304,6 +316,11 @@
     else {
         [_overlayView setHidden:YES];
     }
+#if !TARGET_OS_TV
+    if (_playniteStartupOverlay != nil) {
+        [self.view bringSubviewToFront:_playniteStartupOverlay];
+    }
+#endif
 }
 
 - (void) returnToMainFrame {
@@ -323,6 +340,7 @@
     }
     
 #if !TARGET_OS_TV
+    [_playniteStartupOverlay pausePlaybackForAppDeactivation];
     // Terminate the stream if the app is inactive for 60 seconds
     Log(LOG_I, @"Starting inactivity termination timer");
     _inactivityTimer = [NSTimer scheduledTimerWithTimeInterval:60
@@ -348,6 +366,9 @@
         [_inactivityTimer invalidate];
         _inactivityTimer = nil;
     }
+#if !TARGET_OS_TV
+    [_playniteStartupOverlay resumePlaybackAfterAppActivation];
+#endif
 }
 
 // This fires when the home button is pressed
@@ -390,10 +411,103 @@
     });
 }
 
+- (void)streamModeResolvedForResume:(BOOL)isResume {
+#if !TARGET_OS_TV
+    if (_playniteStartupModeResolved) {
+        return;
+    }
+    _playniteStartupModeResolved = YES;
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if (isResume || !self.streamConfig.playniteStartupAnimationCandidate ||
+        ![defaults boolForKey:PLAYNITE_STARTUP_ANIMATION_ENABLED_KEY]) {
+        return;
+    }
+
+    [self startPlayniteStartupAnimation];
+#endif
+}
+
+#if !TARGET_OS_TV
+- (void)startPlayniteStartupAnimation {
+    if (_playniteStartupOverlay != nil || self.view == nil) {
+        return;
+    }
+
+    // The cover hides only presentation. The Moonlight stream, decoder, audio,
+    // OSC and physical gamepad paths remain active below it.
+    _stageLabel.hidden = YES;
+    _spinner.hidden = YES;
+    _tipLabel.hidden = YES;
+
+    PlayniteStartupOverlay *overlay = [[PlayniteStartupOverlay alloc] initWithFrame:self.view.bounds];
+    _playniteStartupOverlay = overlay;
+    __weak typeof(self) weakSelf = self;
+    overlay.retryHandler = ^{
+        [weakSelf startPlayniteReadinessMonitor];
+    };
+    overlay.manualRevealHandler = ^{
+        [weakSelf clearPlayniteStartupAnimation];
+    };
+    overlay.cancelHandler = ^{
+        [weakSelf returnToMainFrame];
+    };
+    overlay.transitionFinishedHandler = ^{
+        [weakSelf clearPlayniteStartupAnimation];
+    };
+
+    [self.view addSubview:overlay];
+    [self.view bringSubviewToFront:overlay];
+    if (_playniteStreamReady) {
+        [overlay markStreamReady];
+    }
+    [overlay startPlayback];
+    [self startPlayniteReadinessMonitor];
+}
+
+- (void)startPlayniteReadinessMonitor {
+    if (_playniteStartupOverlay == nil || _playniteStartupModeResolved == NO) {
+        return;
+    }
+    if (_playniteReadinessMonitor != nil) {
+        [_playniteReadinessMonitor stop];
+        _playniteReadinessMonitor = nil;
+    }
+
+    NSString *sharedKey = [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY] ?: @"";
+    __weak typeof(self) weakSelf = self;
+    _playniteReadinessMonitor = [[PlayniteReadinessMonitor alloc]
+        initWithHostAddress:self.streamConfig.host
+                  sharedKey:sharedKey
+                  streamView:_streamView
+      readinessConfirmed:^{
+        StreamFrameViewController *strongSelf = weakSelf;
+        if (strongSelf != nil && strongSelf->_playniteStartupOverlay != nil) {
+            [strongSelf->_playniteStartupOverlay markReadinessConfirmed];
+        }
+    }];
+    [_playniteReadinessMonitor start];
+}
+
+- (void)clearPlayniteStartupAnimation {
+    if (_playniteReadinessMonitor != nil) {
+        [_playniteReadinessMonitor stop];
+        _playniteReadinessMonitor = nil;
+    }
+    if (_playniteStartupOverlay != nil) {
+        [_playniteStartupOverlay dispose];
+        _playniteStartupOverlay = nil;
+    }
+}
+#endif
+
 - (void)connectionTerminated:(int)errorCode {
     Log(LOG_I, @"Connection terminated: %d", errorCode);
 
     dispatch_async(dispatch_get_main_queue(), ^{
+#if !TARGET_OS_TV
+        [self clearPlayniteStartupAnimation];
+#endif
         [self->_streamView endStreamingSession];
     });
     
@@ -401,6 +515,9 @@
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
     
     dispatch_async(dispatch_get_main_queue(), ^{
+#if !TARGET_OS_TV
+        [self clearPlayniteStartupAnimation];
+#endif
         // Allow the display to go to sleep now
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         
@@ -495,6 +612,9 @@
     unsigned int portTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portTestFlags);
 
     dispatch_async(dispatch_get_main_queue(), ^{
+#if !TARGET_OS_TV
+        [self clearPlayniteStartupAnimation];
+#endif
         // Allow the display to go to sleep now
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         
@@ -525,6 +645,9 @@
     Log(LOG_I, @"Launch failed: %@", message);
     
     dispatch_async(dispatch_get_main_queue(), ^{
+#if !TARGET_OS_TV
+        [self clearPlayniteStartupAnimation];
+#endif
         // Allow the display to go to sleep now
         [UIApplication sharedApplication].idleTimerDisabled = NO;
         
@@ -628,6 +751,10 @@
 - (void) videoContentShown {
     [_spinner stopAnimating];
     [self.view setBackgroundColor:[UIColor blackColor]];
+#if !TARGET_OS_TV
+    _playniteStreamReady = YES;
+    [_playniteStartupOverlay markStreamReady];
+#endif
 }
 
 - (void)didReceiveMemoryWarning

@@ -11,6 +11,8 @@
 #import "Moonlight-Swift.h"
 #import "StreamConfiguration.h"
 
+#include <stdint.h>
+
 @protocol UserInteractionDelegate <NSObject>
 
 - (void) userInteractionBegan;
@@ -30,6 +32,10 @@
 - (void) showOnScreenControls;
 - (OnScreenControlsLevel) getCurrentOscState;
 - (void) endStreamingSession;
+
+#if !TARGET_OS_TV
+- (BOOL)copyReadinessFrameToRGBA:(uint8_t *)rgbaPixels byteLength:(NSUInteger)byteLength;
+#endif
 
 #if !TARGET_OS_TV
 - (void) updateCursorLocation:(CGPoint)location isMouse:(BOOL)isMouse;

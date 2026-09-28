@@ -1,0 +1,453 @@
+#import "PlayniteStartupOverlay.h"
+
+#import <AVFoundation/AVFoundation.h>
+#import <VideoToolbox/VideoToolbox.h>
+
+#import "Logger.h"
+
+static const NSTimeInterval PlayniteReadinessTimeout = 60.0;
+static const NSTimeInterval PlayniteFadeToBlackDuration = 0.4;
+static const NSTimeInterval PlayniteBlackHoldDuration = 0.2;
+static const NSTimeInterval PlayniteFadeToStreamDuration = 0.5;
+static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
+
+@implementation PlayniteStartupOverlay {
+    AVPlayer *_player;
+    AVPlayerLayer *_playerLayer;
+    AVPlayerItemVideoOutput *_videoOutput;
+    id _timeObserverToken;
+    CVPixelBufferRef _latestVideoFrame;
+
+    UIImageView *_finalFrameView;
+    UIView *_blackView;
+    UIView *_recoveryView;
+    UILabel *_recoveryLabel;
+    UIButton *_retryButton;
+    UIButton *_manualRevealButton;
+    UIButton *_cancelButton;
+    dispatch_block_t _timeoutWorkItem;
+
+    BOOL _playbackStarted;
+    BOOL _videoFinished;
+    BOOL _streamReady;
+    BOOL _readinessConfirmed;
+    BOOL _timedOut;
+    BOOL _transitioning;
+    BOOL _disposed;
+    BOOL _wasPlayingWhenInactive;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.backgroundColor = UIColor.blackColor;
+        self.opaque = YES;
+        self.userInteractionEnabled = YES;
+        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+        _playerLayer = [AVPlayerLayer layer];
+        _playerLayer.videoGravity = AVLayerVideoGravityResizeAspect;
+        [self.layer addSublayer:_playerLayer];
+
+        _finalFrameView = [[UIImageView alloc] initWithFrame:CGRectZero];
+        _finalFrameView.contentMode = UIViewContentModeScaleAspectFit;
+        _finalFrameView.backgroundColor = UIColor.blackColor;
+        _finalFrameView.hidden = YES;
+        [self addSubview:_finalFrameView];
+
+        _blackView = [[UIView alloc] initWithFrame:CGRectZero];
+        _blackView.backgroundColor = UIColor.blackColor;
+        _blackView.alpha = 0;
+        [self addSubview:_blackView];
+
+        _recoveryView = [[UIView alloc] initWithFrame:CGRectZero];
+        _recoveryView.backgroundColor = [UIColor colorWithWhite:0.05 alpha:0.88];
+        _recoveryView.layer.cornerRadius = 12;
+        _recoveryView.layer.masksToBounds = YES;
+        _recoveryView.hidden = YES;
+        [self addSubview:_recoveryView];
+
+        _recoveryLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+        _recoveryLabel.text = @"Playnite readiness was not confirmed.";
+        _recoveryLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+        _recoveryLabel.textColor = UIColor.whiteColor;
+        _recoveryLabel.textAlignment = NSTextAlignmentCenter;
+        [_recoveryView addSubview:_recoveryLabel];
+
+        UIStackView *buttonStack = [[UIStackView alloc] initWithFrame:CGRectZero];
+        buttonStack.axis = UILayoutConstraintAxisHorizontal;
+        buttonStack.alignment = UIStackViewAlignmentFill;
+        buttonStack.distribution = UIStackViewDistributionFillEqually;
+        buttonStack.spacing = 8;
+        [_recoveryView addSubview:buttonStack];
+
+        _retryButton = [self recoveryButtonWithTitle:@"Retry" action:@selector(retryTapped)];
+        _manualRevealButton = [self recoveryButtonWithTitle:@"Show stream" action:@selector(manualRevealTapped)];
+        _manualRevealButton.enabled = NO;
+        _cancelButton = [self recoveryButtonWithTitle:@"Cancel" action:@selector(cancelTapped)];
+        [buttonStack addArrangedSubview:_retryButton];
+        [buttonStack addArrangedSubview:_manualRevealButton];
+        [buttonStack addArrangedSubview:_cancelButton];
+        buttonStack.tag = 7001;
+
+    }
+    return self;
+}
+
+- (UIButton *)recoveryButtonWithTitle:(NSString *)title action:(SEL)action {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    [button setTitle:title forState:UIControlStateNormal];
+    [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    [button setTitleColor:[UIColor colorWithWhite:0.7 alpha:1] forState:UIControlStateDisabled];
+    button.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    button.backgroundColor = [UIColor colorWithWhite:0.24 alpha:1];
+    button.layer.cornerRadius = 8;
+    button.contentEdgeInsets = UIEdgeInsetsMake(8, 10, 8, 10);
+    [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return button;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    _playerLayer.frame = self.bounds;
+    _finalFrameView.frame = self.bounds;
+    _blackView.frame = self.bounds;
+
+    CGFloat width = MIN(MAX(300, self.bounds.size.width - 32), 480);
+    CGFloat safeBottom = 0;
+    if (@available(iOS 11.0, *)) {
+        safeBottom = self.safeAreaInsets.bottom;
+    }
+    _recoveryView.frame = CGRectMake((self.bounds.size.width - width) / 2,
+                                     self.bounds.size.height - safeBottom - 102 - 16,
+                                     width,
+                                     102);
+    _recoveryLabel.frame = CGRectMake(12, 8, width - 24, 26);
+    UIStackView *buttonStack = (UIStackView *)[_recoveryView viewWithTag:7001];
+    buttonStack.frame = CGRectMake(10, 42, width - 20, 50);
+}
+
+- (void)startPlayback {
+    if (_playbackStarted || _disposed) {
+        return;
+    }
+    _playbackStarted = YES;
+    [self resetReadinessTimeout];
+
+    NSURL *videoURL = [[NSBundle mainBundle] URLForResource:@"moonlight_startup" withExtension:@"mp4"];
+    if (videoURL == nil) {
+        Log(LOG_E, @"Playnite startup video is missing from the app bundle");
+        [self finishVideoPlayback];
+        return;
+    }
+
+    AVPlayerItem *item = [AVPlayerItem playerItemWithURL:videoURL];
+    NSDictionary *attributes = @{
+        (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+        (id)kCVPixelBufferCGImageCompatibilityKey: @YES,
+        (id)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
+    };
+    _videoOutput = [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:attributes];
+    [item addOutput:_videoOutput];
+
+    _player = [AVPlayer playerWithPlayerItem:item];
+    _playerLayer.player = _player;
+    [item addObserver:self
+           forKeyPath:@"status"
+              options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+              context:PlaynitePlayerItemStatusContext];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(videoItemFinished:)
+                                                 name:AVPlayerItemDidPlayToEndTimeNotification
+                                               object:item];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(videoItemFailed:)
+                                                 name:AVPlayerItemFailedToPlayToEndTimeNotification
+                                               object:item];
+
+    __weak typeof(self) weakSelf = self;
+    _timeObserverToken = [_player addPeriodicTimeObserverForInterval:CMTimeMake(1, 10)
+                                                               queue:dispatch_get_main_queue()
+                                                          usingBlock:^(CMTime time) {
+        [weakSelf captureVideoFrameAtTime:time];
+    }];
+    Log(LOG_I, @"Starting bundled Playnite Horizon Scan video");
+    [_player play];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey,id> *)change
+                       context:(void *)context {
+    if (context == PlaynitePlayerItemStatusContext && [keyPath isEqualToString:@"status"]) {
+        AVPlayerItem *item = (AVPlayerItem *)object;
+        if (item.status == AVPlayerItemStatusFailed) {
+            Log(LOG_E, @"Playnite startup video item failed to load: %@", item.error);
+            dispatch_async(dispatch_get_main_queue(), ^{ [self finishVideoPlayback]; });
+        }
+        return;
+    }
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+}
+
+- (void)captureVideoFrameAtTime:(CMTime)time {
+    if (_videoOutput == nil || _videoFinished || _disposed || !CMTIME_IS_NUMERIC(time)) {
+        return;
+    }
+
+    CMTime presentationTime = kCMTimeInvalid;
+    CVPixelBufferRef frame = [_videoOutput copyPixelBufferForItemTime:time itemTimeForDisplay:&presentationTime];
+    if (frame != NULL) {
+        if (_latestVideoFrame != NULL) {
+            CVPixelBufferRelease(_latestVideoFrame);
+        }
+        _latestVideoFrame = frame;
+    }
+}
+
+- (UIImage *)imageForPixelBuffer:(CVPixelBufferRef)pixelBuffer {
+    if (pixelBuffer == NULL) {
+        return nil;
+    }
+    CGImageRef cgImage = NULL;
+    OSStatus status = VTCreateCGImageFromCVPixelBuffer(pixelBuffer, NULL, &cgImage);
+    if (status != noErr || cgImage == NULL) {
+        Log(LOG_W, @"Could not retain the final startup-video frame: %d", (int)status);
+        return nil;
+    }
+    UIImage *result = [UIImage imageWithCGImage:cgImage scale:1.0 orientation:UIImageOrientationUp];
+    CGImageRelease(cgImage);
+    return result;
+}
+
+- (void)videoItemFinished:(NSNotification *)notification {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self videoItemFinished:notification]; });
+        return;
+    }
+    AVPlayerItem *item = notification.object;
+    if (_videoOutput != nil && CMTIME_IS_NUMERIC(item.duration) && CMTimeCompare(item.duration, CMTimeMake(1, 60)) > 0) {
+        CMTime finalFrameTime = CMTimeSubtract(item.duration, CMTimeMake(1, 60));
+        [self captureVideoFrameAtTime:finalFrameTime];
+    }
+    [self finishVideoPlayback];
+}
+
+- (void)videoItemFailed:(NSNotification *)notification {
+    Log(LOG_E, @"Playnite startup video playback failed: %@", notification.userInfo);
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self finishVideoPlayback]; });
+    }
+    else {
+        [self finishVideoPlayback];
+    }
+}
+
+- (void)finishVideoPlayback {
+    if (_videoFinished || _disposed) {
+        return;
+    }
+
+    _videoFinished = YES;
+    if (_latestVideoFrame != NULL) {
+        _finalFrameView.image = [self imageForPixelBuffer:_latestVideoFrame];
+        CVPixelBufferRelease(_latestVideoFrame);
+        _latestVideoFrame = NULL;
+    }
+    _finalFrameView.hidden = (_finalFrameView.image == nil);
+    [self releaseVideoPlaybackResources];
+    [self updateRecoveryVisibility];
+    [self maybeStartTransition];
+}
+
+- (void)releaseVideoPlaybackResources {
+    if (_player != nil) {
+        if (_timeObserverToken != nil) {
+            [_player removeTimeObserver:_timeObserverToken];
+            _timeObserverToken = nil;
+        }
+        AVPlayerItem *item = _player.currentItem;
+        if (item != nil) {
+            @try {
+                [item removeObserver:self forKeyPath:@"status" context:PlaynitePlayerItemStatusContext];
+            }
+            @catch (NSException *exception) {
+                // The item may already have invalidated its observation during a failed load.
+                (void)exception;
+            }
+        }
+        [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                        name:AVPlayerItemDidPlayToEndTimeNotification
+                                                      object:item];
+        [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                        name:AVPlayerItemFailedToPlayToEndTimeNotification
+                                                      object:item];
+        [_player pause];
+        _playerLayer.player = nil;
+        _player = nil;
+    }
+    _videoOutput = nil;
+}
+
+- (void)markStreamReady {
+    _streamReady = YES;
+    _manualRevealButton.enabled = _videoFinished;
+    [self maybeStartTransition];
+}
+
+- (void)markReadinessConfirmed {
+    _readinessConfirmed = YES;
+    [self maybeStartTransition];
+}
+
+- (void)resetReadinessTimeout {
+    if (_timeoutWorkItem != nil) {
+        dispatch_block_cancel(_timeoutWorkItem);
+    }
+    __weak typeof(self) weakSelf = self;
+    _timeoutWorkItem = dispatch_block_create(0, ^{
+        PlayniteStartupOverlay *strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf->_disposed || strongSelf->_transitioning) {
+            return;
+        }
+        strongSelf->_timedOut = YES;
+        Log(LOG_W, @"Playnite readiness timed out; explicit recovery controls enabled");
+        [strongSelf updateRecoveryVisibility];
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(PlayniteReadinessTimeout * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), _timeoutWorkItem);
+}
+
+- (void)updateRecoveryVisibility {
+    _recoveryView.hidden = !_timedOut || !_videoFinished || _transitioning || _disposed;
+    _manualRevealButton.enabled = _streamReady && _videoFinished;
+}
+
+- (void)retryTapped {
+    if (_disposed || !_timedOut) {
+        return;
+    }
+    _timedOut = NO;
+    _readinessConfirmed = NO;
+    _recoveryView.hidden = YES;
+    [self resetReadinessTimeout];
+    Log(LOG_I, @"Playnite readiness retry requested");
+    if (self.retryHandler != nil) {
+        self.retryHandler();
+    }
+}
+
+- (void)manualRevealTapped {
+    if (_disposed || !_timedOut || !_streamReady || !_videoFinished) {
+        return;
+    }
+    Log(LOG_I, @"Playnite stream manually revealed after readiness timeout");
+    if (self.manualRevealHandler != nil) {
+        self.manualRevealHandler();
+    }
+}
+
+- (void)cancelTapped {
+    if (_disposed || !_timedOut) {
+        return;
+    }
+    Log(LOG_I, @"Playnite startup cover cancelled after readiness timeout");
+    if (self.cancelHandler != nil) {
+        self.cancelHandler();
+    }
+}
+
+- (void)maybeStartTransition {
+    if (!_videoFinished || !_streamReady || !_readinessConfirmed || _transitioning || _disposed) {
+        return;
+    }
+
+    _transitioning = YES;
+    _recoveryView.hidden = YES;
+    if (_timeoutWorkItem != nil) {
+        dispatch_block_cancel(_timeoutWorkItem);
+        _timeoutWorkItem = nil;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [UIView animateWithDuration:PlayniteFadeToBlackDuration
+                          delay:0
+                        options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut
+                     animations:^{
+        PlayniteStartupOverlay *strongSelf = weakSelf;
+        if (strongSelf != nil) {
+            strongSelf->_blackView.alpha = 1.0;
+        }
+    } completion:^(BOOL finished) {
+        PlayniteStartupOverlay *strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf->_disposed) {
+            return;
+        }
+        // Expose the stream only after the independent black layer is fully opaque.
+        strongSelf->_finalFrameView.hidden = YES;
+        strongSelf.backgroundColor = UIColor.clearColor;
+        strongSelf.opaque = NO;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)(PlayniteBlackHoldDuration * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (strongSelf->_disposed) {
+                return;
+            }
+            [UIView animateWithDuration:PlayniteFadeToStreamDuration
+                                  delay:0
+                                options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut
+                             animations:^{
+                strongSelf->_blackView.alpha = 0;
+            } completion:^(BOOL fadeFinished) {
+                if (!strongSelf->_disposed && strongSelf.transitionFinishedHandler != nil) {
+                    Log(LOG_I, @"Playnite startup cover faded to the matched stream");
+                    strongSelf.transitionFinishedHandler();
+                }
+            }];
+        });
+    }];
+}
+
+- (void)pausePlaybackForAppDeactivation {
+    _wasPlayingWhenInactive = _player.rate > 0;
+    if (_wasPlayingWhenInactive) {
+        [_player pause];
+    }
+}
+
+- (void)resumePlaybackAfterAppActivation {
+    if (_wasPlayingWhenInactive && !_videoFinished && !_disposed) {
+        [_player play];
+    }
+    _wasPlayingWhenInactive = NO;
+}
+
+- (void)dispose {
+    if (_disposed) {
+        return;
+    }
+    _disposed = YES;
+    if (_timeoutWorkItem != nil) {
+        dispatch_block_cancel(_timeoutWorkItem);
+        _timeoutWorkItem = nil;
+    }
+    [self.layer removeAllAnimations];
+    [_blackView.layer removeAllAnimations];
+    [self releaseVideoPlaybackResources];
+    if (_latestVideoFrame != NULL) {
+        CVPixelBufferRelease(_latestVideoFrame);
+        _latestVideoFrame = NULL;
+    }
+    _finalFrameView.image = nil;
+    self.retryHandler = nil;
+    self.manualRevealHandler = nil;
+    self.cancelHandler = nil;
+    self.transitionFinishedHandler = nil;
+    [self removeFromSuperview];
+}
+
+- (void)dealloc {
+    [self dispose];
+}
+
+@end
