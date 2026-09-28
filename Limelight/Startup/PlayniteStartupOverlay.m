@@ -1,6 +1,7 @@
 #import "PlayniteStartupOverlay.h"
 
 #import <AVFoundation/AVFoundation.h>
+#import <QuartzCore/QuartzCore.h>
 #import <VideoToolbox/VideoToolbox.h>
 
 #import "Logger.h"
@@ -10,6 +11,8 @@ static const NSTimeInterval PlayniteFadeToBlackDuration = 0.4;
 static const NSTimeInterval PlayniteBlackHoldDuration = 0.2;
 static const NSTimeInterval PlayniteFadeToStreamDuration = 0.5;
 static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
+static void *PlayniteItemDiagnosticsContext = &PlayniteItemDiagnosticsContext;
+static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContext;
 
 @implementation PlayniteStartupOverlay {
     AVPlayer *_player;
@@ -35,11 +38,20 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
     BOOL _transitioning;
     BOOL _disposed;
     BOOL _wasPlayingWhenInactive;
+    NSTimeInterval _overlayCreatedUptime;
+    NSTimeInterval _lastTimeObserverUptime;
+    NSTimeInterval _lastLayerLayoutLogUptime;
+    NSUInteger _layerLayoutCount;
+    CMTime _latestVideoFrameTime;
+    NSTimer *_mainThreadWatchdogTimer;
+    NSTimeInterval _lastMainThreadWatchdogUptime;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
+        _overlayCreatedUptime = [NSProcessInfo processInfo].systemUptime;
+        _latestVideoFrameTime = kCMTimeInvalid;
         self.backgroundColor = UIColor.blackColor;
         self.opaque = YES;
         self.userInteractionEnabled = YES;
@@ -90,6 +102,11 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
         [buttonStack addArrangedSubview:_cancelButton];
         buttonStack.tag = 7001;
 
+#if DEBUG
+        NSLog(@"[PlayniteDiag] startup overlay created uptime=%.3f mainThread=%@",
+              _overlayCreatedUptime,
+              [NSThread isMainThread] ? @"yes" : @"no");
+#endif
     }
     return self;
 }
@@ -109,6 +126,19 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
 
 - (void)layoutSubviews {
     [super layoutSubviews];
+#if DEBUG
+    _layerLayoutCount++;
+    NSTimeInterval layoutUptime = [NSProcessInfo processInfo].systemUptime;
+    if (_lastLayerLayoutLogUptime == 0 || layoutUptime - _lastLayerLayoutLogUptime >= 1.0) {
+        NSLog(@"[PlayniteDiag] overlay layout window: calls=%lu frame=%.0fx%.0f uptime=%.3f",
+              (unsigned long)_layerLayoutCount,
+              self.bounds.size.width,
+              self.bounds.size.height,
+              layoutUptime);
+        _layerLayoutCount = 0;
+        _lastLayerLayoutLogUptime = layoutUptime;
+    }
+#endif
     _playerLayer.frame = self.bounds;
     _finalFrameView.frame = self.bounds;
     _blackView.frame = self.bounds;
@@ -133,6 +163,15 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
     }
     _playbackStarted = YES;
     [self resetReadinessTimeout];
+#if DEBUG
+    AVAudioSession *audioSession = [AVAudioSession sharedInstance];
+    NSLog(@"[PlayniteDiag] AVPlayer setup begin uptime=%.3f mainThread=%@ audioCategory=%@ audioOptions=0x%lx otherAudioPlaying=%@",
+          [NSProcessInfo processInfo].systemUptime,
+          [NSThread isMainThread] ? @"yes" : @"no",
+          audioSession.category,
+          (unsigned long)audioSession.categoryOptions,
+          audioSession.isOtherAudioPlaying ? @"yes" : @"no");
+#endif
 
     NSURL *videoURL = [[NSBundle mainBundle] URLForResource:@"moonlight_startup" withExtension:@"mp4"];
     if (videoURL == nil) {
@@ -142,6 +181,11 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
     }
 
     AVPlayerItem *item = [AVPlayerItem playerItemWithURL:videoURL];
+#if DEBUG
+    NSLog(@"[PlayniteDiag] AVPlayerItem created at +%.3fs uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime - _overlayCreatedUptime,
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     NSDictionary *attributes = @{
         (id)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
         (id)kCVPixelBufferCGImageCompatibilityKey: @YES,
@@ -152,6 +196,32 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
 
     _player = [AVPlayer playerWithPlayerItem:item];
     _playerLayer.player = _player;
+
+    [item addObserver:self
+           forKeyPath:@"playbackLikelyToKeepUp"
+              options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+              context:PlayniteItemDiagnosticsContext];
+    [item addObserver:self
+           forKeyPath:@"playbackBufferEmpty"
+              options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+              context:PlayniteItemDiagnosticsContext];
+    [item addObserver:self
+           forKeyPath:@"playbackBufferFull"
+              options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+              context:PlayniteItemDiagnosticsContext];
+    [_player addObserver:self
+              forKeyPath:@"timeControlStatus"
+                 options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+                 context:PlaynitePlayerDiagnosticsContext];
+    [_player addObserver:self
+              forKeyPath:@"rate"
+                 options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+                 context:PlaynitePlayerDiagnosticsContext];
+    [_player addObserver:self
+              forKeyPath:@"reasonForWaitingToPlay"
+                 options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+                 context:PlaynitePlayerDiagnosticsContext];
+
     [item addObserver:self
            forKeyPath:@"status"
               options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
@@ -164,15 +234,110 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
                                              selector:@selector(videoItemFailed:)
                                                  name:AVPlayerItemFailedToPlayToEndTimeNotification
                                                object:item];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(videoPlaybackStalled:)
+                                                 name:AVPlayerItemPlaybackStalledNotification
+                                               object:item];
 
     __weak typeof(self) weakSelf = self;
     _timeObserverToken = [_player addPeriodicTimeObserverForInterval:CMTimeMake(1, 10)
                                                                queue:dispatch_get_main_queue()
                                                           usingBlock:^(CMTime time) {
-        [weakSelf captureVideoFrameAtTime:time];
+        PlayniteStartupOverlay *strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf->_disposed) {
+            return;
+        }
+        NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
+        if (strongSelf->_lastTimeObserverUptime > 0) {
+            NSTimeInterval observerGap = now - strongSelf->_lastTimeObserverUptime;
+            if (observerGap >= 0.25) {
+#if DEBUG
+                NSLog(@"[PlayniteDiag] AVPlayer main-queue time observer gap=%.3fs currentTime=%.3f uptime=%.3f",
+                      observerGap,
+                      CMTIME_IS_NUMERIC(time) ? CMTimeGetSeconds(time) : -1.0,
+                      now);
+#endif
+            }
+        }
+        strongSelf->_lastTimeObserverUptime = now;
+        [strongSelf captureVideoFrameAtTime:time];
     }];
+#if DEBUG
+    _lastMainThreadWatchdogUptime = [NSProcessInfo processInfo].systemUptime;
+    _mainThreadWatchdogTimer = [NSTimer timerWithTimeInterval:1.0
+                                                       target:self
+                                                     selector:@selector(mainThreadWatchdogFired:)
+                                                     userInfo:nil
+                                                      repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:_mainThreadWatchdogTimer forMode:NSRunLoopCommonModes];
+    NSLog(@"[PlayniteDiag] AVPlayer play request uptime=%.3f mainThread=%@ playerCount=1",
+          [NSProcessInfo processInfo].systemUptime,
+          [NSThread isMainThread] ? @"yes" : @"no");
+#endif
     Log(LOG_I, @"Starting bundled Playnite Horizon Scan video");
     [_player play];
+}
+
+- (void)mainThreadWatchdogFired:(NSTimer *)timer {
+    (void)timer;
+#if DEBUG
+    NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
+    NSTimeInterval heartbeatGap = _lastMainThreadWatchdogUptime > 0 ?
+        now - _lastMainThreadWatchdogUptime : 0;
+    _lastMainThreadWatchdogUptime = now;
+    NSLog(@"[PlayniteDiag] main-thread heartbeat gap=%.3fs uptime=%.3f",
+          heartbeatGap,
+          now);
+    [self logPlaybackDiagnostics:@"main-thread heartbeat"];
+#endif
+}
+
+- (void)logPlaybackDiagnostics:(NSString *)event {
+#if DEBUG
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self logPlaybackDiagnostics:event]; });
+        return;
+    }
+    AVPlayerItem *item = _player.currentItem;
+    double currentTime = _player != nil && CMTIME_IS_NUMERIC(_player.currentTime) ?
+        CMTimeGetSeconds(_player.currentTime) : -1.0;
+    double videoOutputTime = CMTIME_IS_NUMERIC(_latestVideoFrameTime) ?
+        CMTimeGetSeconds(_latestVideoFrameTime) : -1.0;
+    NSString *timeControlStatus = @"unavailable";
+    if (_player != nil) {
+        switch (_player.timeControlStatus) {
+            case AVPlayerTimeControlStatusPaused:
+                timeControlStatus = @"paused";
+                break;
+            case AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate:
+                timeControlStatus = @"waiting";
+                break;
+            case AVPlayerTimeControlStatusPlaying:
+                timeControlStatus = @"playing";
+                break;
+            default:
+                timeControlStatus = @"unknown";
+                break;
+        }
+    }
+    NSString *waitingReason = _player.reasonForWaitingToPlay ?: @"none";
+    NSLog(@"[PlayniteDiag] t=+%.3fs event=%@ itemStatus=%ld timeControlStatus=%@ rate=%.3f currentTime=%.3f reasonForWaitingToPlay=%@ playbackLikelyToKeepUp=%@ playbackBufferEmpty=%@ playbackBufferFull=%@ videoOutputTime=%.3f layerReadyForDisplay=%@ uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime - _overlayCreatedUptime,
+          event,
+          (long)item.status,
+          timeControlStatus,
+          _player.rate,
+          currentTime,
+          waitingReason,
+          item.playbackLikelyToKeepUp ? @"yes" : @"no",
+          item.playbackBufferEmpty ? @"yes" : @"no",
+          item.playbackBufferFull ? @"yes" : @"no",
+          videoOutputTime,
+          _playerLayer.readyForDisplay ? @"yes" : @"no",
+          [NSProcessInfo processInfo].systemUptime);
+#else
+    (void)event;
+#endif
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
@@ -181,10 +346,19 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
                        context:(void *)context {
     if (context == PlaynitePlayerItemStatusContext && [keyPath isEqualToString:@"status"]) {
         AVPlayerItem *item = (AVPlayerItem *)object;
+#if DEBUG
+        [self logPlaybackDiagnostics:[NSString stringWithFormat:@"item.status changed to %ld", (long)item.status]];
+#endif
         if (item.status == AVPlayerItemStatusFailed) {
             Log(LOG_E, @"Playnite startup video item failed to load: %@", item.error);
             dispatch_async(dispatch_get_main_queue(), ^{ [self finishVideoPlayback]; });
         }
+        return;
+    }
+    if (context == PlayniteItemDiagnosticsContext || context == PlaynitePlayerDiagnosticsContext) {
+#if DEBUG
+        [self logPlaybackDiagnostics:[NSString stringWithFormat:@"KVO %@", keyPath]];
+#endif
         return;
     }
     [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
@@ -195,14 +369,27 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
         return;
     }
 
+    CFTimeInterval copyStart = CACurrentMediaTime();
     CMTime presentationTime = kCMTimeInvalid;
     CVPixelBufferRef frame = [_videoOutput copyPixelBufferForItemTime:time itemTimeForDisplay:&presentationTime];
+    CFTimeInterval copyDuration = CACurrentMediaTime() - copyStart;
     if (frame != NULL) {
         if (_latestVideoFrame != NULL) {
             CVPixelBufferRelease(_latestVideoFrame);
         }
         _latestVideoFrame = frame;
+        _latestVideoFrameTime = CMTIME_IS_NUMERIC(presentationTime) ? presentationTime : time;
     }
+#if DEBUG
+    if (copyDuration >= 0.025) {
+        NSLog(@"[PlayniteDiag] AVPlayerItemVideoOutput copy duration=%.3fs returnedFrame=%@ itemTime=%.3f outputTime=%.3f uptime=%.3f",
+              copyDuration,
+              frame != NULL ? @"yes" : @"no",
+              CMTIME_IS_NUMERIC(time) ? CMTimeGetSeconds(time) : -1.0,
+              CMTIME_IS_NUMERIC(presentationTime) ? CMTimeGetSeconds(presentationTime) : -1.0,
+              [NSProcessInfo processInfo].systemUptime);
+    }
+#endif
 }
 
 - (UIImage *)imageForPixelBuffer:(CVPixelBufferRef)pixelBuffer {
@@ -225,6 +412,9 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
         dispatch_async(dispatch_get_main_queue(), ^{ [self videoItemFinished:notification]; });
         return;
     }
+#if DEBUG
+    [self logPlaybackDiagnostics:@"AVPlayerItemDidPlayToEndTime"];
+#endif
     AVPlayerItem *item = notification.object;
     if (_videoOutput != nil && CMTIME_IS_NUMERIC(item.duration) && CMTimeCompare(item.duration, CMTimeMake(1, 60)) > 0) {
         CMTime finalFrameTime = CMTimeSubtract(item.duration, CMTimeMake(1, 60));
@@ -236,11 +426,30 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
 - (void)videoItemFailed:(NSNotification *)notification {
     Log(LOG_E, @"Playnite startup video playback failed: %@", notification.userInfo);
     if (![NSThread isMainThread]) {
-        dispatch_async(dispatch_get_main_queue(), ^{ [self finishVideoPlayback]; });
+        dispatch_async(dispatch_get_main_queue(), ^{
+#if DEBUG
+            [self logPlaybackDiagnostics:@"AVPlayerItemFailedToPlayToEndTime"];
+#endif
+            [self finishVideoPlayback];
+        });
     }
     else {
+#if DEBUG
+        [self logPlaybackDiagnostics:@"AVPlayerItemFailedToPlayToEndTime"];
+#endif
         [self finishVideoPlayback];
     }
+}
+
+- (void)videoPlaybackStalled:(NSNotification *)notification {
+    (void)notification;
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self videoPlaybackStalled:nil]; });
+        return;
+    }
+#if DEBUG
+    [self logPlaybackDiagnostics:@"AVPlayerItemPlaybackStalled"];
+#endif
 }
 
 - (void)finishVideoPlayback {
@@ -248,6 +457,9 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
         return;
     }
 
+#if DEBUG
+    [self logPlaybackDiagnostics:@"finishVideoPlayback"];
+#endif
     _videoFinished = YES;
     if (_latestVideoFrame != NULL) {
         _finalFrameView.image = [self imageForPixelBuffer:_latestVideoFrame];
@@ -275,12 +487,41 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
                 // The item may already have invalidated its observation during a failed load.
                 (void)exception;
             }
+            NSArray<NSString *> *itemDiagnosticKeyPaths = @[
+                @"playbackLikelyToKeepUp",
+                @"playbackBufferEmpty",
+                @"playbackBufferFull",
+            ];
+            for (NSString *keyPath in itemDiagnosticKeyPaths) {
+                @try {
+                    [item removeObserver:self forKeyPath:keyPath context:PlayniteItemDiagnosticsContext];
+                }
+                @catch (NSException *exception) {
+                    (void)exception;
+                }
+            }
+        }
+        NSArray<NSString *> *playerDiagnosticKeyPaths = @[
+            @"timeControlStatus",
+            @"rate",
+            @"reasonForWaitingToPlay",
+        ];
+        for (NSString *keyPath in playerDiagnosticKeyPaths) {
+            @try {
+                [_player removeObserver:self forKeyPath:keyPath context:PlaynitePlayerDiagnosticsContext];
+            }
+            @catch (NSException *exception) {
+                (void)exception;
+            }
         }
         [[NSNotificationCenter defaultCenter] removeObserver:self
                                                         name:AVPlayerItemDidPlayToEndTimeNotification
                                                       object:item];
         [[NSNotificationCenter defaultCenter] removeObserver:self
                                                         name:AVPlayerItemFailedToPlayToEndTimeNotification
+                                                      object:item];
+        [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                        name:AVPlayerItemPlaybackStalledNotification
                                                       object:item];
         [_player pause];
         _playerLayer.player = nil;
@@ -410,12 +651,18 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
 
 - (void)pausePlaybackForAppDeactivation {
     _wasPlayingWhenInactive = _player.rate > 0;
+#if DEBUG
+    [self logPlaybackDiagnostics:@"app will resign active"];
+#endif
     if (_wasPlayingWhenInactive) {
         [_player pause];
     }
 }
 
 - (void)resumePlaybackAfterAppActivation {
+#if DEBUG
+    [self logPlaybackDiagnostics:@"app did become active"];
+#endif
     if (_wasPlayingWhenInactive && !_videoFinished && !_disposed) {
         [_player play];
     }
@@ -426,7 +673,14 @@ static void *PlaynitePlayerItemStatusContext = &PlaynitePlayerItemStatusContext;
     if (_disposed) {
         return;
     }
+#if DEBUG
+    [self logPlaybackDiagnostics:@"dispose"];
+#endif
     _disposed = YES;
+#if DEBUG
+    [_mainThreadWatchdogTimer invalidate];
+    _mainThreadWatchdogTimer = nil;
+#endif
     if (_timeoutWorkItem != nil) {
         dispatch_block_cancel(_timeoutWorkItem);
         _timeoutWorkItem = nil;

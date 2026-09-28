@@ -111,7 +111,9 @@ CGSize resolutionTable[RESOLUTION_TABLE_SIZE];
 
 #if !TARGET_OS_TV
     if (_playniteStartupLabel != nil) {
-        CGFloat contentWidth = MAX(200, self.scrollView.bounds.size.width - 32);
+        // Leave additional trailing room for the iPhone safe-area adjustment
+        // applied to the settings scroll view in viewSafeAreaInsetsDidChange.
+        CGFloat contentWidth = MAX(200, self.scrollView.bounds.size.width - 56);
         CGFloat left = 16;
         CGFloat top = highestViewY + 24;
         CGSize startupDescriptionSize = [_playniteStartupDescription sizeThatFits:
@@ -355,6 +357,20 @@ BOOL isCustomResolution(CGSize res) {
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
     [textField resignFirstResponder];
     return YES;
+}
+
+- (void)textFieldDidEndEditing:(UITextField *)textField {
+    if (textField != _playniteReadinessKeyField) {
+        return;
+    }
+
+    NSString *sharedKey = textField.text ?: @"";
+    [[NSUserDefaults standardUserDefaults] setObject:sharedKey forKey:PLAYNITE_READINESS_SHARED_KEY];
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Ready Bridge key saved from settings: present=%@ length=%lu",
+          sharedKey.length >= 16 ? @"yes" : @"no",
+          (unsigned long)sharedKey.length);
+#endif
 }
 
 - (void) touchModeChanged {

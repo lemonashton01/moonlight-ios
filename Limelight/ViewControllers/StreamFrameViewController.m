@@ -419,8 +419,16 @@
     _playniteStartupModeResolved = YES;
 
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    if (isResume || !self.streamConfig.playniteStartupAnimationCandidate ||
-        ![defaults boolForKey:PLAYNITE_STARTUP_ANIMATION_ENABLED_KEY]) {
+    BOOL isCandidate = self.streamConfig.playniteStartupAnimationCandidate;
+    BOOL isEnabled = [defaults boolForKey:PLAYNITE_STARTUP_ANIMATION_ENABLED_KEY];
+#if DEBUG
+    NSLog(@"[PlayniteDiag] session mode resolved: resume=%@ candidate=%@ animationEnabled=%@ uptime=%.3f",
+          isResume ? @"yes" : @"no",
+          isCandidate ? @"yes" : @"no",
+          isEnabled ? @"yes" : @"no",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
+    if (isResume || !isCandidate || !isEnabled) {
         return;
     }
 
@@ -462,6 +470,10 @@
         [overlay markStreamReady];
     }
     [overlay startPlayback];
+#if DEBUG
+    NSLog(@"[PlayniteDiag] startup overlay attached; readiness monitor setup follows uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     [self startPlayniteReadinessMonitor];
 }
 
@@ -475,6 +487,18 @@
     }
 
     NSString *sharedKey = [[NSUserDefaults standardUserDefaults] stringForKey:PLAYNITE_READINESS_SHARED_KEY] ?: @"";
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Ready Bridge key read from NSUserDefaults: present=%@ length=%lu",
+          sharedKey.length >= 16 ? @"yes" : @"no",
+          (unsigned long)sharedKey.length);
+#endif
+    if (sharedKey.length < 16) {
+        // With no valid key, no request or UIKit frame capture can occur.
+        // Keep the video cover running on its own and avoid a pointless poll timer.
+        Log(LOG_W, @"Playnite Ready Bridge monitor not started: shared key missing or shorter than 16 characters");
+        return;
+    }
+
     __weak typeof(self) weakSelf = self;
     _playniteReadinessMonitor = [[PlayniteReadinessMonitor alloc]
         initWithHostAddress:self.streamConfig.host
@@ -752,7 +776,14 @@
     [_spinner stopAnimating];
     [self.view setBackgroundColor:[UIColor blackColor]];
 #if !TARGET_OS_TV
+    BOOL firstStreamFrame = !_playniteStreamReady;
     _playniteStreamReady = YES;
+#if DEBUG
+    if (firstStreamFrame) {
+        NSLog(@"[PlayniteDiag] Moonlight first decoded frame displayed uptime=%.3f",
+              [NSProcessInfo processInfo].systemUptime);
+    }
+#endif
     [_playniteStartupOverlay markStreamReady];
 #endif
 }

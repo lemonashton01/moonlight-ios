@@ -14,6 +14,7 @@
 #import "RelativeTouchHandler.h"
 #import "AbsoluteTouchHandler.h"
 #import "KeyboardInputField.h"
+#import <QuartzCore/QuartzCore.h>
 
 #if !TARGET_OS_TV
 #import "SpecialKeysPanel.h"
@@ -46,6 +47,7 @@ static void SendSpecialKeysSequenceEvent(const SpecialKeysSequenceEvent *event, 
 
 #if !TARGET_OS_TV
 @interface StreamView () <SpecialKeysPanelDelegate>
+- (BOOL)copyReadinessFrameToRGBAInternal:(uint8_t *)rgbaPixels byteLength:(NSUInteger)byteLength;
 @end
 #endif
 
@@ -432,6 +434,26 @@ static void SendSpecialKeysSequenceEvent(const SpecialKeysSequenceEvent *event, 
 
 #if !TARGET_OS_TV
 - (BOOL)copyReadinessFrameToRGBA:(uint8_t *)rgbaPixels byteLength:(NSUInteger)byteLength {
+#if DEBUG
+    static CFTimeInterval lastCaptureStart = 0;
+    CFTimeInterval captureStart = CACurrentMediaTime();
+    CFTimeInterval captureInterval = lastCaptureStart > 0 ? captureStart - lastCaptureStart : 0;
+    lastCaptureStart = captureStart;
+    NSLog(@"[PlayniteDiag] stream hierarchy capture begin: mainThread=%@ interval=%.3fs uptime=%.3f",
+          [NSThread isMainThread] ? @"yes" : @"no",
+          captureInterval,
+          [NSProcessInfo processInfo].systemUptime);
+#endif
+    BOOL captured = [self copyReadinessFrameToRGBAInternal:rgbaPixels byteLength:byteLength];
+#if DEBUG
+    NSLog(@"[PlayniteDiag] stream hierarchy capture complete: duration=%.3fs success=%@",
+          CACurrentMediaTime() - captureStart,
+          captured ? @"yes" : @"no");
+#endif
+    return captured;
+}
+
+- (BOOL)copyReadinessFrameToRGBAInternal:(uint8_t *)rgbaPixels byteLength:(NSUInteger)byteLength {
     const NSUInteger requiredLength = ReadinessFrameWidth * ReadinessFrameHeight * ReadinessFrameBytesPerPixel;
     if (![NSThread isMainThread] || rgbaPixels == NULL || byteLength < requiredLength ||
         self.bounds.size.width <= 0 || self.bounds.size.height <= 0) {
@@ -462,7 +484,14 @@ static void SendSpecialKeysSequenceEvent(const SpecialKeysSequenceEvent *event, 
     @try {
         // UIKit captures the visible StreamView hierarchy, including its live
         // AVSampleBufferDisplayLayer, without removing or pausing the renderer.
+        CFTimeInterval hierarchyCaptureStart = CACurrentMediaTime();
         captured = [self drawViewHierarchyInRect:self.bounds afterScreenUpdates:NO];
+#if DEBUG
+        NSLog(@"[PlayniteDiag] drawViewHierarchyInRect: mainThread=%@ duration=%.3fs result=%@ OSCtemporarilyHidden=yes",
+              [NSThread isMainThread] ? @"yes" : @"no",
+              CACurrentMediaTime() - hierarchyCaptureStart,
+              captured ? @"yes" : @"no");
+#endif
     }
     @finally {
         [onScreenControls setControlsTemporarilyHiddenForFrameCapture:NO];

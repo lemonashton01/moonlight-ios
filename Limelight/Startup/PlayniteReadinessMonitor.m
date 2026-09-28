@@ -3,6 +3,7 @@
 #import <CommonCrypto/CommonHMAC.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
+#import <QuartzCore/QuartzCore.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -105,6 +106,8 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
     dispatch_queue_t _stateQueue;
     NSURLSession *_session;
     NSUInteger _consecutiveMatches;
+    NSUInteger _requestCount;
+    NSTimeInterval _requestStartedAt;
     NSString *_lastError;
     BOOL _started;
 }
@@ -175,6 +178,12 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
         configuration.timeoutIntervalForResource = PlayniteRequestTimeout;
         self->_session = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:nil];
         Log(LOG_I, @"Playnite Ready Bridge monitor started for this launch session");
+#if DEBUG
+        NSLog(@"[PlayniteDiag] Ready Bridge monitor active: sharedKeyPresent=%@ sharedKeyLength=%lu uptime=%.3f",
+              self->_sharedKey.length >= 16 ? @"yes" : @"no",
+              (unsigned long)self->_sharedKey.length,
+              [NSProcessInfo processInfo].systemUptime);
+#endif
         [self poll];
     });
 }
@@ -212,6 +221,15 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
     request.HTTPShouldHandleCookies = NO;
     [request setValue:requestSignatureHex forHTTPHeaderField:@"X-Moonlight-Auth"];
 
+    _requestCount++;
+    _requestStartedAt = [NSProcessInfo processInfo].systemUptime;
+#if DEBUG
+    NSLog(@"[PlayniteDiag] HMAC request generated: request=%lu keyLength=%lu uptime=%.3f",
+          (unsigned long)_requestCount,
+          (unsigned long)_sharedKey.length,
+          _requestStartedAt);
+#endif
+
     __weak typeof(self) weakSelf = self;
     NSURLSessionDataTask *task = [_session dataTaskWithRequest:request
                                              completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
@@ -230,6 +248,16 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
     if (self.isStopped) {
         return;
     }
+#if DEBUG
+    NSInteger httpStatus = [response isKindOfClass:NSHTTPURLResponse.class] ?
+        ((NSHTTPURLResponse *)response).statusCode : 0;
+    NSLog(@"[PlayniteDiag] Ready Bridge response: elapsed=%.3fs http=%ld bytes=%lu errorCode=%ld uptime=%.3f",
+          _requestStartedAt > 0 ? [NSProcessInfo processInfo].systemUptime - _requestStartedAt : -1.0,
+          (long)httpStatus,
+          (unsigned long)data.length,
+          (long)error.code,
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     if (error != nil) {
         _consecutiveMatches = 0;
         [self recordError:error.localizedDescription ?: @"Playnite readiness request failed"];
@@ -283,6 +311,11 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
     }
 
     _lastError = nil;
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Ready Bridge response authenticated: state=%@ frameBase64Length=%lu",
+          state,
+          (unsigned long)frameBase64.length);
+#endif
     if ([state isEqualToString:@"waiting"] || frameBase64.length == 0) {
         _consecutiveMatches = 0;
         [self scheduleNextPoll];
@@ -324,18 +357,29 @@ static NSData *PlayniteRGBAFromCGImage(CGImageRef image) {
         return;
     }
 
+    NSTimeInterval captureQueuedAt = [NSProcessInfo processInfo].systemUptime;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.isStopped) {
             return;
         }
+        NSTimeInterval captureStartedAt = [NSProcessInfo processInfo].systemUptime;
         NSMutableData *streamRGBA = [NSMutableData dataWithLength:
             READINESS_FRAME_WIDTH * READINESS_FRAME_HEIGHT * READINESS_FRAME_BYTES_PER_PIXEL];
         BOOL captured = [self->_streamView copyReadinessFrameToRGBA:streamRGBA.mutableBytes
                                                             byteLength:streamRGBA.length];
+        NSTimeInterval captureFinishedAt = [NSProcessInfo processInfo].systemUptime;
         BOOL matched = captured && ReadinessFrameMatcherMatches(referenceRGBA.bytes,
                                                                  streamRGBA.bytes,
                                                                  READINESS_FRAME_WIDTH,
                                                                  READINESS_FRAME_HEIGHT);
+#if DEBUG
+        NSLog(@"[PlayniteDiag] readiness compare: mainQueueDelay=%.3fs captureAndMatch=%.3fs captured=%@ matched=%@ uptime=%.3f",
+              captureStartedAt - captureQueuedAt,
+              captureFinishedAt - captureStartedAt,
+              captured ? @"yes" : @"no",
+              matched ? @"yes" : @"no",
+              captureFinishedAt);
+#endif
         dispatch_async(self->_stateQueue, ^{
             if (self.isStopped) {
                 return;
