@@ -8,6 +8,7 @@
 
 #import "VideoDecoderRenderer.h"
 #import "StreamView.h"
+#import "PlayniteStartupPreferences.h"
 
 #include <libavcodec/avcodec.h>
 #include <libavcodec/cbs.h>
@@ -41,6 +42,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     NSUInteger _diagnosticEnqueueCount;
     NSTimeInterval _diagnosticLastEnqueueUptime;
     NSTimeInterval _diagnosticLastDisplayLinkLogUptime;
+    BOOL _diagnosticSkipVideoEnqueue;
 #endif
 }
 
@@ -98,6 +100,15 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     framePacing = useFramePacing;
     
     parameterSetBuffers = [[NSMutableArray alloc] init];
+#if DEBUG
+    _diagnosticSkipVideoEnqueue =
+        [[NSUserDefaults standardUserDefaults] integerForKey:PLAYNITE_STARTUP_DIAGNOSTIC_MODE_KEY] ==
+        PLAYNITE_DIAGNOSTIC_NO_VIDEO_ENQUEUE;
+    if (_diagnosticSkipVideoEnqueue) {
+        NSLog(@"[PlayniteDiag] diagnostic mode: Moonlight video enqueue suppressed uptime=%.3f",
+              [NSProcessInfo processInfo].systemUptime);
+    }
+#endif
     
     [self reinitializeDisplayLayer];
     
@@ -637,6 +648,11 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
     }
 #endif
 
+    // In this Debug-only diagnostic mode the decoder still creates samples,
+    // but the Moonlight display layer never receives them.
+#if DEBUG
+    if (!_diagnosticSkipVideoEnqueue) {
+#endif
     // Enqueue the next frame
     [self->displayLayer enqueueSampleBuffer:sampleBuffer];
 #if DEBUG
@@ -658,6 +674,9 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
         // Tell our parent VC to hide the progress indicator
         [self->_callbacks videoContentShown];
     }
+#if DEBUG
+    }
+#endif
     
     // Dereference the buffers
     CFRelease(dataBlockBuffer);
