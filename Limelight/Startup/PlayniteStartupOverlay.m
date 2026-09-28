@@ -238,6 +238,26 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
                                              selector:@selector(videoPlaybackStalled:)
                                                  name:AVPlayerItemPlaybackStalledNotification
                                                object:item];
+#if DEBUG
+    if (@available(iOS 16.0, *)) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(playerRateDidChange:)
+                                                     name:AVPlayerRateDidChangeNotification
+                                                   object:_player];
+    }
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(audioSessionInterrupted:)
+                                                 name:AVAudioSessionInterruptionNotification
+                                               object:[AVAudioSession sharedInstance]];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(audioRouteChanged:)
+                                                 name:AVAudioSessionRouteChangeNotification
+                                               object:[AVAudioSession sharedInstance]];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(audioServicesReset:)
+                                                 name:AVAudioSessionMediaServicesWereResetNotification
+                                               object:[AVAudioSession sharedInstance]];
+#endif
 
     __weak typeof(self) weakSelf = self;
     _timeObserverToken = [_player addPeriodicTimeObserverForInterval:CMTimeMake(1, 10)
@@ -321,9 +341,16 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
         }
     }
     NSString *waitingReason = _player.reasonForWaitingToPlay ?: @"none";
-    NSLog(@"[PlayniteDiag] t=+%.3fs event=%@ itemStatus=%ld timeControlStatus=%@ rate=%.3f currentTime=%.3f reasonForWaitingToPlay=%@ playbackLikelyToKeepUp=%@ playbackBufferEmpty=%@ playbackBufferFull=%@ videoOutputTime=%.3f layerReadyForDisplay=%@ uptime=%.3f",
+    CMTimeRange loadedRange = kCMTimeRangeInvalid;
+    if (item.loadedTimeRanges.count > 0) {
+        loadedRange = [item.loadedTimeRanges.lastObject CMTimeRangeValue];
+    }
+    double loadedEnd = CMTIMERANGE_IS_VALID(loadedRange) ?
+        CMTimeGetSeconds(CMTimeRangeGetEnd(loadedRange)) : -1.0;
+    NSLog(@"[PlayniteDiag] t=+%.3fs event=%@ playerStatus=%ld itemStatus=%ld timeControlStatus=%@ rate=%.3f currentTime=%.3f reasonForWaitingToPlay=%@ playbackLikelyToKeepUp=%@ playbackBufferEmpty=%@ playbackBufferFull=%@ loadedEnd=%.3f videoOutputTime=%.3f layerReadyForDisplay=%@ uptime=%.3f",
           [NSProcessInfo processInfo].systemUptime - _overlayCreatedUptime,
           event,
+          (long)_player.status,
           (long)item.status,
           timeControlStatus,
           _player.rate,
@@ -332,6 +359,7 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
           item.playbackLikelyToKeepUp ? @"yes" : @"no",
           item.playbackBufferEmpty ? @"yes" : @"no",
           item.playbackBufferFull ? @"yes" : @"no",
+          loadedEnd,
           videoOutputTime,
           _playerLayer.readyForDisplay ? @"yes" : @"no",
           [NSProcessInfo processInfo].systemUptime);
@@ -339,6 +367,54 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
     (void)event;
 #endif
 }
+
+#if DEBUG
+- (void)playerRateDidChange:(NSNotification *)notification {
+    NSInteger reasonCode = 0;
+    if (@available(iOS 16.0, *)) {
+        AVPlayerRateDidChangeReason reason = notification.userInfo[AVPlayerRateDidChangeReasonKey];
+        if ([reason isEqualToString:AVPlayerRateDidChangeReasonAudioSessionInterrupted]) {
+            reasonCode = 1;
+        }
+        else if ([reason isEqualToString:AVPlayerRateDidChangeReasonAppBackgrounded]) {
+            reasonCode = 2;
+        }
+        else if ([reason isEqualToString:AVPlayerRateDidChangeReasonSetRateCalled]) {
+            reasonCode = 3;
+        }
+        else if ([reason isEqualToString:AVPlayerRateDidChangeReasonSetRateFailed]) {
+            reasonCode = 4;
+        }
+    }
+    // 1=audio interruption, 2=background, 3=explicit rate change, 4=failed rate change.
+    NSLog(@"[PlayniteDiag] AVPlayer rate change reasonCode=%ld rate=%.3f uptime=%.3f",
+          (long)reasonCode, _player.rate, [NSProcessInfo processInfo].systemUptime);
+    [self logPlaybackDiagnostics:@"rateDidChangeNotification"];
+}
+
+- (void)audioSessionInterrupted:(NSNotification *)notification {
+    NSLog(@"[PlayniteDiag] AVAudioSession interruption type=%ld reason=%ld option=%ld uptime=%.3f",
+          (long)[notification.userInfo[AVAudioSessionInterruptionTypeKey] integerValue],
+          (long)[notification.userInfo[AVAudioSessionInterruptionReasonKey] integerValue],
+          (long)[notification.userInfo[AVAudioSessionInterruptionOptionKey] integerValue],
+          [NSProcessInfo processInfo].systemUptime);
+    [self logPlaybackDiagnostics:@"audioSessionInterruption"];
+}
+
+- (void)audioRouteChanged:(NSNotification *)notification {
+    NSLog(@"[PlayniteDiag] AVAudioSession route change reason=%ld uptime=%.3f",
+          (long)[notification.userInfo[AVAudioSessionRouteChangeReasonKey] integerValue],
+          [NSProcessInfo processInfo].systemUptime);
+    [self logPlaybackDiagnostics:@"audioRouteChange"];
+}
+
+- (void)audioServicesReset:(NSNotification *)notification {
+    (void)notification;
+    NSLog(@"[PlayniteDiag] AVAudioSession media services reset uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+    [self logPlaybackDiagnostics:@"audioServicesReset"];
+}
+#endif
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
                       ofObject:(id)object
@@ -523,6 +599,22 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
         [[NSNotificationCenter defaultCenter] removeObserver:self
                                                         name:AVPlayerItemPlaybackStalledNotification
                                                       object:item];
+#if DEBUG
+        if (@available(iOS 16.0, *)) {
+            [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                            name:AVPlayerRateDidChangeNotification
+                                                          object:_player];
+        }
+        [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                        name:AVAudioSessionInterruptionNotification
+                                                      object:[AVAudioSession sharedInstance]];
+        [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                        name:AVAudioSessionRouteChangeNotification
+                                                      object:[AVAudioSession sharedInstance]];
+        [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                        name:AVAudioSessionMediaServicesWereResetNotification
+                                                      object:[AVAudioSession sharedInstance]];
+#endif
         [_player pause];
         _playerLayer.player = nil;
         _player = nil;

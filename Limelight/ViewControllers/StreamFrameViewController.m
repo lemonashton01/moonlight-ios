@@ -335,6 +335,11 @@
 
 // This will fire if the user opens control center or gets a low battery message
 - (void)applicationWillResignActive:(NSNotification *)notification {
+#if DEBUG
+    NSLog(@"[PlayniteDiag] UIApplication will resign active state=%ld uptime=%.3f",
+          (long)[UIApplication sharedApplication].applicationState,
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     if (_inactivityTimer != nil) {
         [_inactivityTimer invalidate];
     }
@@ -360,6 +365,10 @@
 }
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
+#if DEBUG
+    NSLog(@"[PlayniteDiag] UIApplication did become active uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     // Stop the background timer, since we're foregrounded again
     if (_inactivityTimer != nil) {
         Log(LOG_I, @"Stopping inactivity timer after becoming active again");
@@ -373,6 +382,10 @@
 
 // This fires when the home button is pressed
 - (void)applicationDidEnterBackground:(UIApplication *)application {
+#if DEBUG
+    NSLog(@"[PlayniteDiag] UIApplication did enter background uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     Log(LOG_I, @"Terminating stream immediately for backgrounding");
 
     if (_inactivityTimer != nil) {
@@ -390,6 +403,10 @@
 }
 
 - (void) connectionStarted {
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight connection started callback uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     Log(LOG_I, @"Connection started");
     dispatch_async(dispatch_get_main_queue(), ^{
         // Leave the spinner spinning until it's obscured by

@@ -35,11 +35,22 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     
     CADisplayLink* _displayLink;
     BOOL framePacing;
+#if DEBUG
+    BOOL _diagnosticFirstSampleCreated;
+    BOOL _diagnosticFirstSampleEnqueued;
+    NSUInteger _diagnosticEnqueueCount;
+    NSTimeInterval _diagnosticLastEnqueueUptime;
+    NSTimeInterval _diagnosticLastDisplayLinkLogUptime;
+#endif
 }
 
 - (void)reinitializeDisplayLayer
 {
     CALayer *oldLayer = displayLayer;
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight display layer initialize replacing=%@ uptime=%.3f",
+          oldLayer != nil ? @"yes" : @"no", [NSProcessInfo processInfo].systemUptime);
+#endif
     
     displayLayer = [[AVSampleBufferDisplayLayer alloc] init];
     displayLayer.backgroundColor = [UIColor blackColor].CGColor;
@@ -97,10 +108,18 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
 {
     self->videoFormat = videoFormat;
     self->frameRate = frameRate;
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight stream format resolved width=%d height=%d fps=%d uptime=%.3f",
+          videoWidth, videoHeight, frameRate, [NSProcessInfo processInfo].systemUptime);
+#endif
 }
 
 - (void)start
 {
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight display link start uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(displayLinkCallback:)];
     if (@available(iOS 15.0, tvOS 15.0, *)) {
         _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(self->frameRate, self->frameRate, self->frameRate);
@@ -118,9 +137,16 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
 {
     VIDEO_FRAME_HANDLE handle;
     PDECODE_UNIT du;
+#if DEBUG
+    CFTimeInterval callbackStart = CACurrentMediaTime();
+    NSUInteger framesSubmitted = 0;
+#endif
     
     while (LiPollNextVideoFrame(&handle, &du)) {
         LiCompleteVideoFrame(handle, DrSubmitDecodeUnit(du));
+#if DEBUG
+        framesSubmitted++;
+#endif
         
         if (framePacing) {
             // Calculate the actual display refresh rate
@@ -138,6 +164,16 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
             }
         }
     }
+#if DEBUG
+    NSTimeInterval now = [NSProcessInfo processInfo].systemUptime;
+    CFTimeInterval duration = CACurrentMediaTime() - callbackStart;
+    if (framesSubmitted > 0 && (_diagnosticLastDisplayLinkLogUptime == 0 ||
+                                now - _diagnosticLastDisplayLinkLogUptime >= 1.0 || duration >= 0.05)) {
+        NSLog(@"[PlayniteDiag] Moonlight display link submitted=%lu durationMs=%.1f pending=%d uptime=%.3f",
+              (unsigned long)framesSubmitted, duration * 1000.0, LiGetPendingVideoFrames(), now);
+        _diagnosticLastDisplayLinkLogUptime = now;
+    }
+#endif
 }
 
 - (void)stop
@@ -593,9 +629,27 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
         CFRelease(frameBlockBuffer);
         return DR_NEED_IDR;
     }
+#if DEBUG
+    if (!_diagnosticFirstSampleCreated) {
+        _diagnosticFirstSampleCreated = YES;
+        NSLog(@"[PlayniteDiag] Moonlight first CMSampleBuffer created uptime=%.3f",
+              [NSProcessInfo processInfo].systemUptime);
+    }
+#endif
 
     // Enqueue the next frame
     [self->displayLayer enqueueSampleBuffer:sampleBuffer];
+#if DEBUG
+    NSTimeInterval enqueueUptime = [NSProcessInfo processInfo].systemUptime;
+    _diagnosticEnqueueCount++;
+    if (!_diagnosticFirstSampleEnqueued || enqueueUptime - _diagnosticLastEnqueueUptime >= 1.0) {
+        NSLog(@"[PlayniteDiag] Moonlight CMSampleBuffer enqueued first=%@ count=%lu layerStatus=%ld uptime=%.3f",
+              _diagnosticFirstSampleEnqueued ? @"no" : @"yes",
+              (unsigned long)_diagnosticEnqueueCount, (long)displayLayer.status, enqueueUptime);
+        _diagnosticFirstSampleEnqueued = YES;
+        _diagnosticLastEnqueueUptime = enqueueUptime;
+    }
+#endif
     
     if (du->frameType == FRAME_TYPE_IDR) {
         // Ensure the layer is visible now

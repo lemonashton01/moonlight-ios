@@ -47,16 +47,28 @@ static VideoDecoderRenderer* renderer;
 
 int DrDecoderSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags)
 {
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight decoder setup begin format=%d width=%d height=%d fps=%d uptime=%.3f",
+          videoFormat, width, height, redrawRate, [NSProcessInfo processInfo].systemUptime);
+#endif
     [renderer setupWithVideoFormat:videoFormat width:width height:height frameRate:redrawRate];
     lastFrameNumber = 0;
     activeVideoFormat = videoFormat;
     memset(&currentVideoStats, 0, sizeof(currentVideoStats));
     memset(&lastVideoStats, 0, sizeof(lastVideoStats));
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight decoder setup complete uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     return 0;
 }
 
 void DrStart(void)
 {
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight decoder start uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     [renderer start];
 }
 
@@ -191,11 +203,22 @@ int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, v
 {
     int err;
     SDL_AudioSpec want, have;
+#if DEBUG
+    AVAudioSession *diagnosticAudioSession = [AVAudioSession sharedInstance];
+    NSLog(@"[PlayniteDiag] Moonlight audio init begin category=%@ mode=%@ uptime=%.3f",
+          diagnosticAudioSession.category, diagnosticAudioSession.mode,
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
         Log(LOG_E, @"Failed to initialize audio subsystem: %s\n", SDL_GetError());
         return -1;
     }
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight SDL audio subsystem initialized category=%@ mode=%@ uptime=%.3f",
+          diagnosticAudioSession.category, diagnosticAudioSession.mode,
+          [NSProcessInfo processInfo].systemUptime);
+#endif
         
     SDL_zero(want);
     want.freq = opusConfig->sampleRate;
@@ -204,6 +227,11 @@ int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, v
     want.samples = opusConfig->samplesPerFrame;
 
     audioDevice = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight SDL audio device open result=%u category=%@ mode=%@ uptime=%.3f",
+          (unsigned)audioDevice, diagnosticAudioSession.category, diagnosticAudioSession.mode,
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     if (audioDevice == 0) {
         Log(LOG_E, @"Failed to open audio device: %s\n", SDL_GetError());
         ArCleanup();
@@ -233,9 +261,26 @@ int ArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, v
     
     // Start playback
     SDL_PauseAudioDevice(audioDevice, 0);
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight SDL audio playback started uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     
     // Disable lowering volume of other audio streams (SDL sets AVAudioSessionCategoryOptionDuckOthers by default)
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
+    NSError *audioCategoryError = nil;
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight AVAudioSession category change begin uptime=%.3f",
+          [NSProcessInfo processInfo].systemUptime);
+#endif
+    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback
+                                     withOptions:AVAudioSessionCategoryOptionMixWithOthers
+                                           error:&audioCategoryError];
+#if DEBUG
+    NSLog(@"[PlayniteDiag] Moonlight AVAudioSession category change complete success=%@ errorCode=%ld category=%@ mode=%@ uptime=%.3f",
+          audioCategoryError == nil ? @"yes" : @"no", (long)audioCategoryError.code,
+          diagnosticAudioSession.category, diagnosticAudioSession.mode,
+          [NSProcessInfo processInfo].systemUptime);
+#endif
     
     return 0;
 }
