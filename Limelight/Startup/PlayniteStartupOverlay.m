@@ -5,6 +5,7 @@
 #import <VideoToolbox/VideoToolbox.h>
 
 #import "Logger.h"
+#import "PlayniteStartupPreferences.h"
 
 static const NSTimeInterval PlayniteReadinessTimeout = 60.0;
 static const NSTimeInterval PlayniteFadeToBlackDuration = 0.4;
@@ -165,6 +166,29 @@ static void *PlaynitePlayerDiagnosticsContext = &PlaynitePlayerDiagnosticsContex
     [self resetReadinessTimeout];
 #if DEBUG
     AVAudioSession *audioSession = [AVAudioSession sharedInstance];
+    NSInteger diagnosticMode = [[NSUserDefaults standardUserDefaults] integerForKey:PLAYNITE_STARTUP_DIAGNOSTIC_MODE_KEY];
+    if (diagnosticMode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_CATEGORY ||
+        diagnosticMode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_ACTIVE) {
+        NSTimeInterval prepareStart = [NSProcessInfo processInfo].systemUptime;
+        NSError *categoryError = nil;
+        BOOL categorySet = [audioSession setCategory:AVAudioSessionCategoryPlayback
+                                        withOptions:AVAudioSessionCategoryOptionMixWithOthers
+                                              error:&categoryError];
+        NSLog(@"[PlayniteDiag] startup audio category prepared success=%@ errorCode=%ld durationMs=%.1f category=%@ options=0x%lx uptime=%.3f",
+              categorySet ? @"yes" : @"no", (long)categoryError.code,
+              ([NSProcessInfo processInfo].systemUptime - prepareStart) * 1000.0,
+              audioSession.category, (unsigned long)audioSession.categoryOptions,
+              [NSProcessInfo processInfo].systemUptime);
+        if (diagnosticMode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_ACTIVE && categorySet) {
+            NSTimeInterval activationStart = [NSProcessInfo processInfo].systemUptime;
+            NSError *activationError = nil;
+            BOOL activated = [audioSession setActive:YES error:&activationError];
+            NSLog(@"[PlayniteDiag] startup audio session activated success=%@ errorCode=%ld durationMs=%.1f uptime=%.3f",
+                  activated ? @"yes" : @"no", (long)activationError.code,
+                  ([NSProcessInfo processInfo].systemUptime - activationStart) * 1000.0,
+                  [NSProcessInfo processInfo].systemUptime);
+        }
+    }
     NSLog(@"[PlayniteDiag] AVPlayer setup begin uptime=%.3f mainThread=%@ audioCategory=%@ audioOptions=0x%lx otherAudioPlaying=%@",
           [NSProcessInfo processInfo].systemUptime,
           [NSThread isMainThread] ? @"yes" : @"no",

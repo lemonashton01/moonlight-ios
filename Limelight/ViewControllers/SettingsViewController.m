@@ -386,6 +386,12 @@ BOOL isCustomResolution(CGSize res) {
     else if (mode == PLAYNITE_DIAGNOSTIC_NO_VIDEO_ENQUEUE) {
         title = @"Startup test: No video enqueue";
     }
+    else if (mode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_CATEGORY) {
+        title = @"Startup test: Prepare audio category";
+    }
+    else if (mode == PLAYNITE_DIAGNOSTIC_PREPARE_AUDIO_ACTIVE) {
+        title = @"Startup test: Prepare audio active";
+    }
     [_playniteDiagnosticModeButton setTitle:title forState:UIControlStateNormal];
 }
 
@@ -393,7 +399,8 @@ BOOL isCustomResolution(CGSize res) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Startup diagnostic mode"
                                                                    message:@"Temporary test for the next stream. Restore Normal afterwards."
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
-    NSArray<NSString *> *titles = @[@"Normal", @"No stream audio", @"No video enqueue"];
+    NSArray<NSString *> *titles = @[@"Normal", @"No stream audio", @"No video enqueue",
+                                    @"Prepare audio category", @"Prepare audio active"];
     for (NSInteger mode = 0; mode < titles.count; mode++) {
         NSInteger selectedMode = mode;
         [alert addAction:[UIAlertAction actionWithTitle:titles[mode]
